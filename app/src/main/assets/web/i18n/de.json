@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "Bild wird eingestellt  die benutzerdefinierte Nachricht wird ignoriert. Löschen Sie das Bild, um stattdessen eine Nachricht zu verwenden.",
     "screen_deterrent_image": "Eingepasstes Bild oder GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, bis zu 8 MB. Ersetzt den gesamten Bildschirm.",
+    "themes_title": "Themen von Giovanni Mirulla",
+    "download_set": "Herunterladen & Anwenden",
+    "downloading": "Wird heruntergeladen...",
+    "applied": "Angewendet!",
+    "failed": "Fehlgeschlagen",
+    "test_on_screen": "Am Bildschirm testen",
     "screen_deterrent_upload": "Aufgeladen",
     "screen_deterrent_replace": "Bild ersetzen",
     "screen_deterrent_remove": "Das Bild entfernt",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "Blinken",
     "cmd_find": "Finden",
     "cmd_live": "Live",
+    "cmd_recordings": "Aufnahmen",
     "cmd_trunk_open": "Öffneter Kofferraum",
     "cmd_trunk_close": "Schließbarer Kofferraum",
     "cmd_trips": "Fahrten",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "vor {n} h",
     "toast_command_sent": "Befehl gesendet",
     "toast_command_failed": "Befehl fehlgeschlagen",
-    "toast_no_location": "Fahrzeugposition nicht verfügbar",
-    "cmd_recordings": "Aufnahmen"
+    "toast_no_location": "Fahrzeugposition nicht verfügbar"
   }
 }

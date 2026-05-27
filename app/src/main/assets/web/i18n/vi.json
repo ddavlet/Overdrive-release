@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "Hình ảnh được đặt  thông điệp tùy chỉnh đang bị bỏ qua. xóa hình ảnh để sử dụng thông điệp thay vào đó.",
     "screen_deterrent_image": "Hình ảnh tùy chỉnh hoặc GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, lên đến 8 MB. Thay thế toàn bộ màn hình.",
+    "themes_title": "Chủ đề của Giovanni Mirulla",
+    "download_set": "Download & Set",
+    "downloading": "Tải xuống",
+    "applied": "- Được áp dụng!",
+    "failed": "Thất bại",
+    "test_on_screen": "Khán giả:",
     "screen_deterrent_upload": "Lái lên",
     "screen_deterrent_replace": "Thay thế hình ảnh",
     "screen_deterrent_remove": "Hình ảnh Remove",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "Nháy đèn",
     "cmd_find": "Tìm",
     "cmd_live": "Trực tiếp",
+    "cmd_recordings": "Bản ghi",
     "cmd_trunk_open": "Thùng mở",
     "cmd_trunk_close": "Thùng bể đóng",
     "cmd_trips": "Chuyến đi",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n} giờ trước",
     "toast_command_sent": "Đã gửi lệnh",
     "toast_command_failed": "Lệnh thất bại",
-    "toast_no_location": "Không có vị trí xe",
-    "cmd_recordings": "Bản ghi"
+    "toast_no_location": "Không có vị trí xe"
   }
 }

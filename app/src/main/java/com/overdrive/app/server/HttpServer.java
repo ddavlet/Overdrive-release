@@ -116,8 +116,7 @@ public class HttpServer {
             } catch (Exception e) {
                 CameraDaemon.log("Could not extract BYD Bangcle tables: " + e.getMessage());
             }
-
-
+            
             CameraDaemon.log("Web assets extracted to " + WEB_ROOT);
         } catch (Exception e) {
             CameraDaemon.log("Failed to extract web assets: " + e.getMessage());
@@ -228,7 +227,10 @@ public class HttpServer {
     private void handleClient(Socket client) {
         try {
             client.setSoTimeout(15000);
-            BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream()));
+            // Force UTF-8 so the body byte-count loop below is deterministic.
+            // The platform default on Android is UTF-8 anyway, but pinning it
+            // here removes the implicit dependency on the JVM property.
+            BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream(), "UTF-8"));
             OutputStream out = new BufferedOutputStream(client.getOutputStream());
 
             String requestLine = reader.readLine();
@@ -325,14 +327,31 @@ public class HttpServer {
                 return;
             }
             if (contentLength > 0) {
-                char[] bodyChars = new char[contentLength];
-                int totalRead = 0;
-                while (totalRead < contentLength) {
-                    int read = reader.read(bodyChars, totalRead, contentLength - totalRead);
+                // Content-Length is in BYTES per RFC 7230. BufferedReader is a
+                // character stream — UTF-8 multi-byte chars (e.g. "₹" = U+20B9
+                // = 3 bytes but 1 char) decode 1:1 into Java chars, so reading
+                // `contentLength` chars on a body containing non-ASCII would
+                // block forever waiting for chars that will never come (the
+                // browser already sent the full byte count, but it represents
+                // fewer chars). Loop until the UTF-8 byte count of what we've
+                // accumulated equals the declared Content-Length.
+                //
+                // Headers are guaranteed ASCII (HTTP/1.1 spec) so the
+                // BufferedReader.readLine() loop above is unaffected.
+                int CHUNK = Math.min(contentLength, 4096);
+                char[] bodyChars = new char[CHUNK];
+                StringBuilder sb = new StringBuilder(contentLength);
+                int bytesAccumulated = 0;
+                while (bytesAccumulated < contentLength) {
+                    int read = reader.read(bodyChars, 0, CHUNK);
                     if (read == -1) break;  // EOF
-                    totalRead += read;
+                    sb.append(bodyChars, 0, read);
+                    // Encode just the chars read this iteration to count their
+                    // UTF-8 byte length. Cheaper than re-encoding the whole
+                    // accumulator each tick.
+                    bytesAccumulated += new String(bodyChars, 0, read).getBytes("UTF-8").length;
                 }
-                body = new String(bodyChars, 0, totalRead);
+                body = sb.toString();
             }
 
             String[] parts = requestLine.split(" ");
@@ -946,7 +965,50 @@ public class HttpServer {
         
         // Network info (WiFi SSID + IP or Mobile Data)
         status.put("network", com.overdrive.app.monitor.NetworkMonitor.getNetworkInfo());
-        
+
+        // Pre-record buffer health — exposes byte-ring stats so the UI can
+        // detect a degraded session (post-OOM "no pre-record" mode, key
+        // drops under sustained pin-stall, etc.) and warn the user. Without
+        // this, all those degraded states are silent.
+        try {
+            com.overdrive.app.surveillance.GpuSurveillancePipeline preRecPipeline = CameraDaemon.getGpuPipeline();
+            if (preRecPipeline != null) {
+                com.overdrive.app.surveillance.HardwareEventRecorderGpu enc = preRecPipeline.getEncoder();
+                if (enc != null) {
+                    JSONObject preRec = new JSONObject();
+                    boolean preRecOn = enc.isPreRecordEnabled();
+                    preRec.put("preRecordEnabled", preRecOn);
+                    com.overdrive.app.surveillance.H264ByteRingBuffer ring = enc.getPreRecordBuffer();
+                    if (ring != null) {
+                        preRec.put("currentSeconds", Math.round(ring.getDurationSeconds() * 10) / 10.0);
+                        preRec.put("currentMB", Math.round(ring.storedBytes() / (1024.0 * 1024.0) * 10) / 10.0);
+                        preRec.put("maxSeconds", ring.getMaxDurationUs() / 1_000_000L);
+                        preRec.put("packetCount", ring.size());
+                        // Structured drop counters so the UI can warn on
+                        // sustained key drops without parsing the free-form
+                        // stats string. Negative-pressure indicators only —
+                        // healthy steady-state has all three at zero.
+                        preRec.put("totalAdds", ring.getTotalAdds());
+                        preRec.put("totalEvictions", ring.getTotalEvictions());
+                        preRec.put("totalKeyDrops", ring.getTotalKeyDrops());
+                        preRec.put("totalPDrops", ring.getTotalPDrops());
+                        preRec.put("stats", ring.getStats());
+                    } else {
+                        // Distinguish stream-only encoders (deliberately no
+                        // pre-record) from byte-ring allocation failures.
+                        boolean ooMd = enc.isPreRecordAllocFailed();
+                        preRec.put("degraded", ooMd);
+                        preRec.put("reason", ooMd
+                            ? "byte-ring allocation failed at boot — pre-record disabled this session"
+                            : "stream-only encoder (no pre-record by design)");
+                    }
+                    status.put("preRecord", preRec);
+                }
+            }
+        } catch (Exception e) {
+            // Pre-record stats are diagnostic; failure here mustn't block /status.
+        }
+
         HttpResponse.sendJson(out, status.toString());
     }
 

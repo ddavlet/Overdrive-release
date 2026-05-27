@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "画像が設定されます  カスタムメッセージは無視されています.代わりにメッセージを使用するために画像を削除します.",
     "screen_deterrent_image": "カスタム画像またはGIF",
     "screen_deterrent_image_desc": "PNG/JPG/WebP/GIF,最大8MB.全画面を交換する.",
+    "themes_title": "テーマ作成: Giovanni Mirulla",
+    "download_set": "ダウンロードして設定",
+    "downloading": "ダウンロード中...",
+    "applied": "適用しました!",
+    "failed": "失敗",
+    "test_on_screen": "画面でテスト",
     "screen_deterrent_upload": "負荷が上がる",
     "screen_deterrent_replace": "画像を交換する",
     "screen_deterrent_remove": "画像を削除する",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "ライト点滅",
     "cmd_find": "車を探す",
     "cmd_live": "ライブ",
+    "cmd_recordings": "録画",
     "cmd_trunk_open": "オープントランク",
     "cmd_trunk_close": "閉ざされたトランク",
     "cmd_trips": "走行履歴",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n}時間前",
     "toast_command_sent": "コマンドを送信しました",
     "toast_command_failed": "コマンドが失敗しました",
-    "toast_no_location": "車両の位置が取得できません",
-    "cmd_recordings": "録画"
+    "toast_no_location": "車両の位置が取得できません"
   }
 }

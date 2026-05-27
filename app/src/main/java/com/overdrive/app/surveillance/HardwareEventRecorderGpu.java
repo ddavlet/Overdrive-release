@@ -12,8 +12,6 @@ import com.overdrive.app.telegram.TelegramNotifier;
 
 import java.io.File;
 import java.nio.ByteBuffer;
-import java.util.List;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * HardwareEventRecorderGpu - MediaCodec encoder with Surface input for GPU pipeline.
@@ -110,11 +108,20 @@ public class HardwareEventRecorderGpu {
     private volatile boolean writerAbortedCorrupt = false;
     private MediaFormat savedFormat = null;  // Save format for reuse
     
-    // Circular buffer for pre-record
-    // SOTA: Static buffer shared across encoder instances to avoid 23MB reallocation on reinit
-    private static H264CircularBuffer sharedPreRecordBuffer;
+    // Pre-record ring buffer.
+    // SOTA: byte-ring (single contiguous direct ByteBuffer) shared across encoder
+    // instances. Replaces the per-packet slot-pool (H264CircularBuffer) which
+    // padded every slot to 1 MB regardless of frame size — 80% memory waste +
+    // OOM at MAX/30fps. Byte ring packs bytes tightly; same 64 MB budget that
+    // held 5s of MAX H.265 in the slot pool now holds ~50s.
+    //
+    // Static so it survives encoder reinit (codec/quality changes don't drop
+    // pre-record content). 64 MB allocation happens once at first init and
+    // is never freed.
+    private static H264ByteRingBuffer sharedPreRecordBuffer;
     private static final Object bufferLock = new Object();
-    private H264CircularBuffer preRecordBuffer;  // Reference to shared buffer
+    private static final int PRE_RECORD_BUDGET_BYTES = 64 * 1024 * 1024;  // 64 MB
+    private H264ByteRingBuffer preRecordBuffer;  // Reference to shared buffer
     // Volatile + accessed only under startStopLock for read-modify-write safety.
     // Concurrent triggerEventRecording calls (e.g., RecordingModeManager + the
     // deferred-format listener thread firing in the same window) used to both
@@ -123,15 +130,22 @@ public class HardwareEventRecorderGpu {
     // closes that window.
     private volatile boolean isWritingToFile = false;
     private final Object startStopLock = new Object();
-    private long postRecordStopTime = 0;
     
-    // SOTA: Async pre-record flush queue (eliminates blocking on motion trigger)
-    // Packets are queued here and written by drainEncoder() on the GL thread.
-    // Bounded to prevent OOM under SD-card stalls — at 30 fps a stalled SD
-    // card would otherwise let this grow without bound.
-    private final ConcurrentLinkedQueue<H264CircularBuffer.Packet> pendingFlushQueue = new ConcurrentLinkedQueue<>();
+    // SOTA: Pre-record flush is now a streaming Cursor over the byte ring.
+    // The previous design deep-copied every pre-record packet onto the
+    // trigger thread (~50-180KB × N packets of fresh allocateDirect calls,
+    // 5-50ms native heap stalls during the burst) and queued them on
+    // {@code pendingFlushQueue}. The byte ring eliminates that copy: the
+    // drainer thread iterates the cursor and writes packets directly into
+    // {@code muxerWriteQueue} via the existing pooled MuxerPacket path.
+    // Cursor is set at trigger time, drained by drainEncoderInternal, and
+    // closed (releases the pin) when exhausted or aborted.
+    private volatile H264ByteRingBuffer.Cursor pendingFlushCursor = null;
     private volatile boolean flushInProgress = false;
     private volatile long actualPreRecordDurationMs = 0;  // Actual duration of flushed pre-record buffer
+    /** Reusable BufferInfo for cursor reads. drainEncoderInternal is the
+     * sole consumer thread, so this can be reused without locking. */
+    private final MediaCodec.BufferInfo flushCursorInfo = new MediaCodec.BufferInfo();
 
     // SOTA: Muxer write queue — decouples encoder dequeue from SD card I/O.
     // The encoder dequeue loop copies frame data and releases the encoder buffer
@@ -333,11 +347,22 @@ public class HardwareEventRecorderGpu {
     
     // SOTA: Flag to disable pre-record buffer for stream-only encoders
     private boolean usePreRecordBuffer = true;
+    // Set true when init()'s byte-ring allocation throws OOM. Distinct from
+    // setUsePreRecordBuffer(false) which is the deliberate stream-only mode.
+    // /api/status surfaces this so the UI can warn about a degraded session.
+    private volatile boolean preRecordAllocFailed = false;
 
-    // FIX (Bug A): Initial pre-record buffer duration. Settable BEFORE init() so the
+    // Initial pre-record buffer duration. Settable BEFORE init() so the
     // first allocation honours the user's saved value instead of the hardcoded 5s.
     // setPreRecordDuration() can still resize after init.
-    private int preRecordDurationSeconds = 5;
+    //
+    // volatile: written by the control-plane (setPreRecordDuration called
+    // from HTTP/IPC threads) under bufferLock, read by init() also under
+    // bufferLock — but ALSO read at line 738 outside the lock for logging,
+    // and by setPreRecordDuration's caller pattern. Lock-paired access
+    // would be safe but volatile makes the field uniformly visible across
+    // all reader paths without lock-protocol fragility.
+    private volatile int preRecordDurationSeconds = 5;
     
     // Pre-allocated BufferInfo — reused every drain cycle to avoid per-frame allocation
     private final MediaCodec.BufferInfo reusableBufferInfo = new MediaCodec.BufferInfo();
@@ -669,41 +694,46 @@ public class HardwareEventRecorderGpu {
         }
         logger.info("Encoder started");
         
-        // SOTA: Reuse shared buffer across encoder instances (avoids 23MB allocation on reinit)
-        // Only allocate for encoders that use pre-record (not stream-only encoders)
+        // SOTA: byte-ring is allocated once (lazy) and shared across encoder
+        // instances. The ring's byte arena is bitrate- and fps-agnostic, so
+        // codec/bitrate/fps changes never recreate it — only the user's
+        // duration setting can require a window adjustment, which is a
+        // cheap field write. This eliminates the four-axis triplet reuse
+        // logic the slot pool needed.
         if (usePreRecordBuffer) {
             synchronized (bufferLock) {
-                int desiredSec = Math.max(1, preRecordDurationSeconds);
-                // Pass the encoder's fps so the buffer pool is sized for
-                // duration × fps + headroom. Without this, switching to
-                // 30 fps recording exhausts the pool (sized for 15 fps) and
-                // triggers emergency allocations under sustained load.
+                int desiredSec = Math.max(1, Math.min(30, preRecordDurationSeconds));
                 if (sharedPreRecordBuffer == null) {
-                    logger.info("Allocating NEW pre-record buffer (" + desiredSec
-                        + " sec @ " + fps + "fps @ " + (bitrate / 1_000_000) + "Mbps)...");
-                    sharedPreRecordBuffer = new H264CircularBuffer(desiredSec, fps, bitrate);
+                    logger.info("Allocating pre-record byte ring: budget="
+                        + (PRE_RECORD_BUDGET_BYTES / 1024 / 1024) + "MB, duration="
+                        + desiredSec + "s (one-time allocation, survives encoder reinit)");
+                    try {
+                        sharedPreRecordBuffer = new H264ByteRingBuffer(PRE_RECORD_BUDGET_BYTES, desiredSec);
+                    } catch (OutOfMemoryError | RuntimeException oom) {
+                        // Graceful degradation: the daemon's heap couldn't
+                        // satisfy a 64 MB direct allocation. Drop pre-record
+                        // capability for this session — live recording still
+                        // works, but events have no pre-roll. The user-visible
+                        // effect is "the first ~5s before each motion trigger
+                        // are missing," which is preferable to a daemon that
+                        // refuses to come up at all.
+                        logger.error("Pre-record byte ring allocation failed (" + oom.getMessage()
+                            + ") — running without pre-record. Live recording unaffected.");
+                        sharedPreRecordBuffer = null;
+                        usePreRecordBuffer = false;
+                        preRecordAllocFailed = true;
+                    }
                 } else {
+                    // Buffer already exists — clear residual data from prior
+                    // encoder instance and update duration if it changed.
+                    sharedPreRecordBuffer.clear();
                     long desiredUs = desiredSec * 1_000_000L;
-                    // Reuse only when duration, fps AND bitrate match. The
-                    // bitrate check matters because the per-packet ceiling
-                    // is sized from bitrate at ctor time — a STANDARD-sized
-                    // pool reused at MAX silently drops every I-frame
-                    // (>525 KB at 10 Mbps H.265) and leaves the rolling
-                    // window with zero keyframes, breaking pre-record.
-                    boolean durationMismatch = sharedPreRecordBuffer.getMaxDurationUs() != desiredUs;
-                    boolean fpsMismatch = sharedPreRecordBuffer.getSizedForFps() != Math.max(10, Math.min(30, fps));
-                    boolean bitrateMismatch = sharedPreRecordBuffer.getSizedForBitrate() != Math.max(500_000, bitrate);
-                    if (durationMismatch || fpsMismatch || bitrateMismatch) {
-                        logger.info("Resizing existing pre-record buffer to "
-                            + desiredSec + " sec @ " + fps + "fps @ "
-                            + (bitrate / 1_000_000) + "Mbps (was "
-                            + (sharedPreRecordBuffer.getMaxDurationUs() / 1_000_000L) + "s @ "
-                            + sharedPreRecordBuffer.getSizedForFps() + "fps @ "
-                            + (sharedPreRecordBuffer.getSizedForBitrate() / 1_000_000) + "Mbps)");
-                        sharedPreRecordBuffer = new H264CircularBuffer(desiredSec, fps, bitrate);
+                    if (sharedPreRecordBuffer.getMaxDurationUs() != desiredUs) {
+                        sharedPreRecordBuffer.setMaxDurationUs(desiredUs);
+                        logger.info("Reusing pre-record byte ring with new duration: "
+                            + desiredSec + "s");
                     } else {
-                        logger.info("Reusing EXISTING pre-record buffer (Zero-Allocation)");
-                        sharedPreRecordBuffer.clear();  // Clear old data but keep allocated memory
+                        logger.info("Reusing pre-record byte ring: " + desiredSec + "s");
                     }
                 }
                 preRecordBuffer = sharedPreRecordBuffer;
@@ -729,37 +759,19 @@ public class HardwareEventRecorderGpu {
      * @param durationSeconds New buffer duration in seconds
      */
     public void setPreRecordDuration(int durationSeconds) {
-        int clamped = Math.max(1, durationSeconds);
-        // FIX (Bug A): always remember the desired duration so that a later init()
-        // (e.g. after pipeline reinit) allocates the correct size.
+        int clamped = Math.max(1, Math.min(30, durationSeconds));
+        // Always remember the desired duration so a later init() (e.g. after
+        // pipeline reinit) starts at the correct window even if the byte ring
+        // has been freed.
         this.preRecordDurationSeconds = clamped;
         synchronized (bufferLock) {
             if (sharedPreRecordBuffer != null) {
-                long currentMaxDurationUs = clamped * 1_000_000L;
-                // Reuse only when duration, fps AND bitrate match. See the
-                // symmetric guard in HardwareEventRecorderGpu.init() for the
-                // rationale on each axis. Bitrate matters because the
-                // per-packet ceiling is sized from bitrate at ctor time —
-                // a quality bump after this object was built would otherwise
-                // start dropping I-frames silently.
-                int safeFps = Math.max(10, Math.min(30, fps));
-                int safeBitrate = Math.max(500_000, bitrate);
-                boolean durationMismatch = sharedPreRecordBuffer.getMaxDurationUs() != currentMaxDurationUs;
-                boolean fpsMismatch = sharedPreRecordBuffer.getSizedForFps() != safeFps;
-                boolean bitrateMismatch = sharedPreRecordBuffer.getSizedForBitrate() != safeBitrate;
-                if (durationMismatch || fpsMismatch || bitrateMismatch) {
-                    logger.info("Pre-record buffer recreate: " + clamped + " sec @ "
-                        + fps + "fps @ " + (bitrate / 1_000_000) + "Mbps (was "
-                        + (sharedPreRecordBuffer.getMaxDurationUs() / 1_000_000L) + "s @ "
-                        + sharedPreRecordBuffer.getSizedForFps() + "fps @ "
-                        + (sharedPreRecordBuffer.getSizedForBitrate() / 1_000_000) + "Mbps)");
-                    sharedPreRecordBuffer = new H264CircularBuffer(clamped, fps, bitrate);
-                    preRecordBuffer = sharedPreRecordBuffer;
+                long desiredUs = clamped * 1_000_000L;
+                if (sharedPreRecordBuffer.getMaxDurationUs() != desiredUs) {
+                    sharedPreRecordBuffer.setMaxDurationUs(desiredUs);
+                    logger.info("Pre-record duration updated to " + clamped + "s (window only — no reallocation)");
                 } else {
-                    logger.info("Pre-record buffer already at " + clamped + "s @ "
-                        + safeFps + "fps @ " + (safeBitrate / 1_000_000)
-                        + "Mbps, clearing only");
-                    sharedPreRecordBuffer.clear();
+                    logger.info("Pre-record duration already at " + clamped + "s — no-op");
                 }
             }
         }
@@ -932,9 +944,11 @@ public class HardwareEventRecorderGpu {
         // duplicate-files-on-disk bug.
         synchronized (startStopLock) {
             if (isWritingToFile) {
-                // Already recording, extend post-record duration
-                postRecordStopTime = System.currentTimeMillis() + postRecordDurationMs;
-                logger.info("Event extended - post-record timer reset to " + postRecordDurationMs + "ms");
+                // Already recording — caller (proximity controller / sentry
+                // engine) owns the actual stop schedule. We just no-op here;
+                // the previous "extend the post-record timer" path wrote a
+                // field nothing read.
+                logger.info("Event already in progress — second trigger ignored (extend handled by caller)");
                 return true;
             }
 
@@ -1006,23 +1020,31 @@ public class HardwareEventRecorderGpu {
                 return false;
             }
 
-            if (savedFormat != null) {
-                // SOTA: Queue pre-record packets for async flush (NON-BLOCKING!)
-                // drainEncoder() will write these on the GL thread
-                List<H264CircularBuffer.Packet> preRecordPackets = preRecordBuffer.getPacketsForFlush();
-                double preRecordDuration = preRecordPackets.isEmpty() ? 0 :
-                    (preRecordPackets.get(preRecordPackets.size()-1).info.presentationTimeUs -
-                     preRecordPackets.get(0).info.presentationTimeUs) / 1_000_000.0;
+            if (savedFormat != null && preRecordBuffer != null) {
+                // SOTA: streaming flush. beginFlush() takes a seqlock-validated
+                // snapshot and pins the byte-arena read frontier. The drainer
+                // thread iterates the cursor and writes packets directly into
+                // muxerWriteQueue — no deep-copy, no per-packet allocateDirect
+                // burst on the trigger thread.
+                //
+                // Pre-record duration is computed approximately from the first
+                // and last packet's PTS (can't be exact because we'd have to
+                // walk the cursor twice; close enough for log + timeline).
+                int flushBytes = preRecordBuffer.peekFlushBytes();
+                double preRecordDuration = preRecordBuffer.getDurationSeconds();
+                actualPreRecordDurationMs = (long) (preRecordDuration * 1000);
 
-                // Store actual pre-record duration for timeline alignment
-                actualPreRecordDurationMs = (long)(preRecordDuration * 1000);
-
-                // Add all packets to the flush queue (instant, no I/O)
-                pendingFlushQueue.addAll(preRecordPackets);
-                flushInProgress = true;
-
-                logger.info(String.format("Queued %d pre-record packets (%.1f sec) for async flush",
-                        preRecordPackets.size(), preRecordDuration));
+                H264ByteRingBuffer.Cursor cursor = preRecordBuffer.beginFlush();
+                if (cursor != null) {
+                    pendingFlushCursor = cursor;
+                    flushInProgress = true;
+                    logger.info(String.format(
+                        "Pre-record flush armed: %d packets (%.1f sec, %.1f MB) — streaming via cursor",
+                        cursor.remaining(), preRecordDuration, flushBytes / 1024.0 / 1024.0));
+                } else {
+                    logger.warn("Pre-record flush skipped — no keyframe in buffer");
+                    flushInProgress = false;
+                }
             }
 
             // Reset state
@@ -1030,7 +1052,9 @@ public class HardwareEventRecorderGpu {
             segmentStartTime = System.currentTimeMillis();  // Enable segment rotation for long events
             segmentNumber = 0;
             segmentBasePath = outputPath.replaceAll("\\.mp4$", "");  // Store base path for segment rotation
-            postRecordStopTime = System.currentTimeMillis() + postRecordDurationMs;
+            // Post-record duration is enforced by the caller (sentry engine /
+            // proximity controller / RecordingModeManager) — this encoder
+            // does not own the stop schedule.
 
             isWritingToFile = true;
             recording = true;  // Keep for compatibility
@@ -1291,7 +1315,6 @@ public class HardwareEventRecorderGpu {
         recordedFrames = 0;
         firstFramePtsUs = -1;
         lastFramePtsUs = -1;
-        postRecordStopTime = 0;
         segmentStartTime = 0;
         segmentNumber = 0;
         segmentBasePath = null;
@@ -1340,17 +1363,11 @@ public class HardwareEventRecorderGpu {
     }
     
     /**
-     * Changes the encoder bitrate dynamically.
+     * Change the encoder bitrate at runtime via MediaCodec.setParameters.
      *
-     * <p>Symmetric with {@link #setPreRecordDuration}: also resizes the
-     * shared pre-record circular buffer so its per-packet capacity covers
-     * the new bitrate's IDR worst-case. The previous version only reset
-     * KEY_VIDEO_BITRATE on the encoder; if the user moved from STANDARD
-     * (2 Mbps) to MAX (10 Mbps) the buffer was still sized for 2 Mbps and
-     * 800+ KB IDRs at the new bitrate would silently overflow the buffer's
-     * per-slot ceiling, dropping pre-record keyframes and leaving the
-     * pre-roll empty. The buffer recreate matches setPreRecordDuration's
-     * "duration / fps / bitrate triplet" reuse rule exactly.
+     * <p>The byte-ring pre-record buffer is bitrate-agnostic — bytes pack
+     * tightly regardless of I-frame size — so this is a pure encoder
+     * reconfig. No buffer reallocation, no pre-record content loss.
      *
      * @param newBitrate New bitrate in bps
      */
@@ -1360,32 +1377,32 @@ public class HardwareEventRecorderGpu {
                 Bundle params = new Bundle();
                 params.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, newBitrate);
                 encoder.setParameters(params);
-
                 this.bitrate = newBitrate;
                 logger.info("Bitrate changed to: " + (newBitrate / 1_000_000) + " Mbps");
-
-                // Resize the pre-record buffer to match the new bitrate.
-                // Same triplet (duration/fps/bitrate) reuse rule as
-                // setPreRecordDuration's symmetric path.
-                synchronized (bufferLock) {
-                    if (sharedPreRecordBuffer != null) {
-                        int safeFps = Math.max(10, Math.min(30, fps));
-                        int safeBitrate = Math.max(500_000, newBitrate);
-                        if (sharedPreRecordBuffer.getSizedForBitrate() != safeBitrate) {
-                            int durationSec = (int) (sharedPreRecordBuffer.getMaxDurationUs() / 1_000_000L);
-                            logger.info("Pre-record buffer recreate (bitrate change): "
-                                + durationSec + " sec @ " + safeFps + "fps @ "
-                                + (safeBitrate / 1_000_000) + "Mbps (was "
-                                + (sharedPreRecordBuffer.getSizedForBitrate() / 1_000_000) + "Mbps)");
-                            sharedPreRecordBuffer = new H264CircularBuffer(durationSec, safeFps, safeBitrate);
-                            preRecordBuffer = sharedPreRecordBuffer;
-                        }
-                    }
-                }
             } catch (Exception e) {
                 logger.error("Failed to change bitrate", e);
             }
         }
+    }
+
+    /**
+     * Update the encoder's tracked FPS.
+     *
+     * <p>Android {@code MediaCodec} does NOT support changing
+     * {@code KEY_FRAME_RATE} at runtime — it's a configure-time hint for
+     * rate control. This method just updates the cached value so internal
+     * code reading {@link #getFps} sees the new target. Rate control
+     * recalibrates to the actual surface delivery rate over a few seconds.
+     *
+     * <p>The byte-ring pre-record buffer is fps-agnostic, so no buffer
+     * change is needed.
+     */
+    public void setTargetFps(int newFps) {
+        if (newFps == this.fps) return;
+        int oldFps = this.fps;
+        this.fps = newFps;
+        logger.info("Encoder FPS tracking updated to: " + newFps
+            + " (was " + oldFps + "; KEY_FRAME_RATE remains unchanged — Android MediaCodec limitation)");
     }
     
     /**
@@ -1405,7 +1422,37 @@ public class HardwareEventRecorderGpu {
     public boolean isWritingToFile() {
         return isWritingToFile;
     }
-    
+
+    /**
+     * @return true if the pre-record byte ring is allocated and active for
+     *         this encoder. False if the encoder is stream-only or if the
+     *         byte-ring allocation failed (OOM at boot — see init()'s
+     *         try/catch around {@code new H264ByteRingBuffer}). Surfaced
+     *         via /api/status so the UI can warn about a degraded session.
+     */
+    public boolean isPreRecordEnabled() {
+        return usePreRecordBuffer && preRecordBuffer != null;
+    }
+
+    /**
+     * @return true if init()'s byte-ring allocation threw OOM and pre-record
+     *         is disabled for this session. Distinct from a stream-only
+     *         encoder which deliberately skips pre-record.
+     */
+    public boolean isPreRecordAllocFailed() {
+        return preRecordAllocFailed;
+    }
+
+    /**
+     * Diagnostic accessor for the pre-record buffer. Returns null when
+     * pre-record is disabled or the buffer wasn't allocated. Consumers
+     * MUST treat this as read-only stats — the buffer's lifecycle is
+     * owned by the encoder.
+     */
+    public H264ByteRingBuffer getPreRecordBuffer() {
+        return preRecordBuffer;
+    }
+
     /**
      * Gets the number of recorded frames.
      * 
@@ -1479,20 +1526,20 @@ public class HardwareEventRecorderGpu {
             inputSurface = null;
         }
 
-        // Clear the shared pre-record buffer if THIS instance owned it. The
-        // buffer is static + shared across encoder reinits to avoid 23MB
-        // realloc, but stale packets from a previous codec/resolution must
-        // not survive into the next event recording. Without this, a crash
-        // path that skips stopRecording() leaves packets in the buffer that
-        // the next instance will flush into its first event MP4.
-        if (preRecordBuffer != null) {
-            synchronized (bufferLock) {
-                if (preRecordBuffer == sharedPreRecordBuffer) {
-                    sharedPreRecordBuffer.clear();
-                }
-            }
-            preRecordBuffer = null;
-        }
+        // Drop our reference to the shared byte ring. We deliberately do
+        // NOT clear() here — the next encoder's init() will clear() the
+        // shared buffer at the right moment (under bufferLock, with the
+        // new encoder's parameters known). Clearing here on every release
+        // had two harmful effects:
+        //   (a) bitrate-only reinit (which goes through reinitializeEncoder
+        //       → release → new encoder) wiped the entire pre-record window
+        //       even though the bytes are still valid for the new encoder.
+        //   (b) shutdown mid-flush left an orphaned cursor whose pinOffset
+        //       was retained because clear() didn't reset the pin (now fixed
+        //       in H264ByteRingBuffer.clear() too as belt-and-braces).
+        // The init reuse path is the canonical "boundary" between two
+        // encoder lifetimes; that's where stale-content rejection belongs.
+        preRecordBuffer = null;
 
         logger.info( "Released");
     }
@@ -1806,13 +1853,49 @@ public class HardwareEventRecorderGpu {
         // drop-non-keyframe policy, AND the disk writer is now FOREGROUND
         // priority so it drains the burst quickly.
         if (flushInProgress && muxerStarted) {
+            H264ByteRingBuffer.Cursor cursor = pendingFlushCursor;
             int flushedCount = 0;
-            H264CircularBuffer.Packet queuedPacket;
-            while ((queuedPacket = pendingFlushQueue.poll()) != null) {
-                MuxerPacket mp = acquireMuxerPacket(queuedPacket.info.size);
-                fillMuxerPacket(mp, queuedPacket.data, queuedPacket.info);
-                offerMuxerPacket(mp);
-                flushedCount++;
+            if (cursor != null) {
+                try {
+                    while (true) {
+                        int sz = cursor.peekSize();
+                        if (sz <= 0) break;
+                        // Acquire-and-fill must be exception-safe: if next()
+                        // throws (e.g., outDst.put surfaces a transient
+                        // BufferOverflowException because the encoder produced
+                        // a frame larger than the muxer pool's slot ceiling),
+                        // we must NOT leak the packet back to GC. The pool is
+                        // bounded; a leaked direct buffer waits for the
+                        // Cleaner and starves later acquires.
+                        MuxerPacket mp = acquireMuxerPacket(sz);
+                        boolean handed = false;
+                        try {
+                            mp.data.position(0);
+                            mp.data.limit(mp.data.capacity());
+                            if (!cursor.next(mp.data, flushCursorInfo)) {
+                                // Aborted (pin broken) or exhausted.
+                                break;
+                            }
+                            mp.payloadSize = flushCursorInfo.size;
+                            mp.info.set(0, flushCursorInfo.size,
+                                flushCursorInfo.presentationTimeUs, flushCursorInfo.flags);
+                            offerMuxerPacket(mp);
+                            handed = true;
+                            flushedCount++;
+                        } finally {
+                            if (!handed) {
+                                releaseMuxerPacket(mp);
+                            }
+                        }
+                    }
+                    if (cursor.aborted()) {
+                        logger.warn("Pre-record flush aborted by concurrent keyframe (pin broken) — partial flush of "
+                            + flushedCount + " packets");
+                    }
+                } finally {
+                    cursor.close();
+                    pendingFlushCursor = null;
+                }
             }
             if (flushedCount > 0) {
                 logger.info("Async flush complete: " + flushedCount + " pre-record frames queued for disk write");

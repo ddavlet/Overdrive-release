@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "이미지 설정  사용자 지정 메시지가 무시되고 있습니다. 대신 메시지를 사용하기 위해 이미지를 클리어하십시오.",
     "screen_deterrent_image": "사용자 지정 이미지 또는 GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, 최대 8 MB. 전체 화면을 대체합니다.",
+    "themes_title": "테마 제작: Giovanni Mirulla",
+    "download_set": "다운로드 및 적용",
+    "downloading": "다운로드 중...",
+    "applied": "적용됨!",
+    "failed": "실패",
+    "test_on_screen": "화면에서 테스트",
     "screen_deterrent_upload": "부하",
     "screen_deterrent_replace": "이미지 교체",
     "screen_deterrent_remove": "이미지 제거",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "라이트 점멸",
     "cmd_find": "차량 찾기",
     "cmd_live": "라이브",
+    "cmd_recordings": "녹화",
     "cmd_trunk_open": "열리는 트렁크",
     "cmd_trunk_close": "닫힌 트렁크",
     "cmd_trips": "주행 기록",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n}시간 전",
     "toast_command_sent": "명령을 보냈습니다",
     "toast_command_failed": "명령이 실패했습니다",
-    "toast_no_location": "차량 위치를 사용할 수 없음",
-    "cmd_recordings": "녹화"
+    "toast_no_location": "차량 위치를 사용할 수 없음"
   }
 }

@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "Afbeelding wordt ingesteld  het aangepaste bericht wordt genegeerd. Maak het beeld leeg om in plaats daarvan een bericht te gebruiken.",
     "screen_deterrent_image": "Op maat gemaakte afbeelding of GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, tot 8 MB. Vervangt het hele scherm.",
+    "themes_title": "Thema's van Giovanni Mirulla",
+    "download_set": "Download & Toepassen",
+    "downloading": "Downloaden...",
+    "applied": "Toegepast!",
+    "failed": "Mislukt",
+    "test_on_screen": "Testen op scherm",
     "screen_deterrent_upload": "Opladen",
     "screen_deterrent_replace": "Afbeelding vervangen",
     "screen_deterrent_remove": "Beeld verwijderen",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "Knipperen",
     "cmd_find": "Vinden",
     "cmd_live": "Live",
+    "cmd_recordings": "Opnames",
     "cmd_trunk_open": "Open kofferbak",
     "cmd_trunk_close": "Sluitde kofferbak",
     "cmd_trips": "Ritten",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n} u geleden",
     "toast_command_sent": "Commando verzonden",
     "toast_command_failed": "Commando mislukt",
-    "toast_no_location": "Voertuiglocatie niet beschikbaar",
-    "cmd_recordings": "Opnames"
+    "toast_no_location": "Voertuiglocatie niet beschikbaar"
   }
 }

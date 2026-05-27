@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "圖片設定 定制訊息被忽略. 清除圖片以使用訊息.",
     "screen_deterrent_image": "定制圖像或GIF",
     "screen_deterrent_image_desc": "顯示屏幕的容量可達 8 MB.",
+    "themes_title": "喬瓦尼米魯拉的題材",
+    "download_set": "下載 & 設定",
+    "downloading": "接下來,我們會看到",
+    "applied": "這樣就能做到!",
+    "failed": "沒有成功",
+    "test_on_screen": "關於 屏幕測試",
     "screen_deterrent_upload": "起的負荷",
     "screen_deterrent_replace": "取代圖片",
     "screen_deterrent_remove": "取出圖片",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "閃燈",
     "cmd_find": "尋車",
     "cmd_live": "即時",
+    "cmd_recordings": "錄影",
     "cmd_trunk_open": "打開箱子",
     "cmd_trunk_close": "密封的行李箱",
     "cmd_trips": "行程",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n}小時前",
     "toast_command_sent": "命令已傳送",
     "toast_command_failed": "命令失敗",
-    "toast_no_location": "無法取得車輛位置",
-    "cmd_recordings": "錄影"
+    "toast_no_location": "無法取得車輛位置"
   }
 }

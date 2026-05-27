@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "Imagen se establece  el mensaje personalizado se está ignorando. Elimine la imagen para usar un mensaje en su lugar.",
     "screen_deterrent_image": "Imagen personalizada o GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, hasta 8 MB. Remplaza toda la pantalla.",
+    "themes_title": "Temas de Giovanni Mirulla",
+    "download_set": "Descargar y aplicar",
+    "downloading": "Descargando...",
+    "applied": "¡Aplicado!",
+    "failed": "Error",
+    "test_on_screen": "Probar en pantalla",
     "screen_deterrent_upload": "Carga de arriba",
     "screen_deterrent_replace": "Reemplazar la imagen",
     "screen_deterrent_remove": "Retirada de la imagen",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "Luces",
     "cmd_find": "Localizar",
     "cmd_live": "En vivo",
+    "cmd_recordings": "Grabaciones",
     "cmd_trunk_open": "El maletero abierto",
     "cmd_trunk_close": "Cuerpo cerrado",
     "cmd_trips": "Viajes",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "hace {n} h",
     "toast_command_sent": "Comando enviado",
     "toast_command_failed": "Falló el comando",
-    "toast_no_location": "Ubicación del coche no disponible",
-    "cmd_recordings": "Grabaciones"
+    "toast_no_location": "Ubicación del coche no disponible"
   }
 }

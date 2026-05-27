@@ -1486,25 +1486,44 @@ public class CameraDaemon {
                 log("Pre-init: Set codec to " + persistedCodec);
             }
             
-            String persistedBitrate = HttpServer.getRecordingBitrate();
-            if (persistedBitrate != null) {
-                com.overdrive.app.surveillance.GpuPipelineConfig.BitratePreset preset;
-                switch (persistedBitrate.toUpperCase()) {
-                    case "LOW":
-                        preset = com.overdrive.app.surveillance.GpuPipelineConfig.BitratePreset.LOW;
-                        break;
-                    case "HIGH":
-                        preset = com.overdrive.app.surveillance.GpuPipelineConfig.BitratePreset.HIGH;
-                        break;
-                    case "MEDIUM":
-                    default:
-                        preset = com.overdrive.app.surveillance.GpuPipelineConfig.BitratePreset.MEDIUM;
-                        break;
-                }
-                gpuPipeline.getConfig().setBitratePreset(preset);
+            // Prefer the canonical recordingQuality tier (ECONOMY..MAX) over
+            // the legacy recordingBitrate (LOW/MEDIUM/HIGH) — applyPersistedSettings
+            // will later apply recordingQuality, and if pre-init used the
+            // legacy preset (which maps to a smaller bitrate range) the
+            // encoder gets reinitialized at boot. That reinit allocates a
+            // larger pre-record pool against the daemon's already-warm heap
+            // and can OOM (5s × 30fps × 10Mbps tries to grab 187 MB).
+            String persistedQuality = HttpServer.getRecordingQuality();
+            if (persistedQuality != null) {
+                com.overdrive.app.surveillance.GpuPipelineConfig.RecordingQuality tier =
+                    com.overdrive.app.surveillance.GpuPipelineConfig.RecordingQuality.fromString(persistedQuality);
+                gpuPipeline.getConfig().setRecordingQuality(tier);
                 int effectiveBitrate = gpuPipeline.getConfig().getEffectiveBitrate();
-                log("Pre-init: Set bitrate to " + persistedBitrate + " (" + effectiveBitrate / 1_000_000 + " Mbps for " +
+                log("Pre-init: Set quality to " + tier + " (" + effectiveBitrate / 1_000_000 + " Mbps for " +
                     gpuPipeline.getConfig().getVideoCodec() + ")");
+            } else {
+                // Fall back to legacy bitrate preset for installs that haven't
+                // migrated to the tier-based config yet.
+                String persistedBitrate = HttpServer.getRecordingBitrate();
+                if (persistedBitrate != null) {
+                    com.overdrive.app.surveillance.GpuPipelineConfig.BitratePreset preset;
+                    switch (persistedBitrate.toUpperCase()) {
+                        case "LOW":
+                            preset = com.overdrive.app.surveillance.GpuPipelineConfig.BitratePreset.LOW;
+                            break;
+                        case "HIGH":
+                            preset = com.overdrive.app.surveillance.GpuPipelineConfig.BitratePreset.HIGH;
+                            break;
+                        case "MEDIUM":
+                        default:
+                            preset = com.overdrive.app.surveillance.GpuPipelineConfig.BitratePreset.MEDIUM;
+                            break;
+                    }
+                    gpuPipeline.getConfig().setBitratePreset(preset);
+                    int effectiveBitrate = gpuPipeline.getConfig().getEffectiveBitrate();
+                    log("Pre-init: Set bitrate to " + persistedBitrate + " (" + effectiveBitrate / 1_000_000 + " Mbps for " +
+                        gpuPipeline.getConfig().getVideoCodec() + ")");
+                }
             }
             
             gpuPipeline.init(assetManager, com.overdrive.app.daemon.DaemonBootstrap.getContext());

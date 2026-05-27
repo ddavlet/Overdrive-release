@@ -448,9 +448,16 @@ public class StorageManager {
         String currentPath = isSd ? sdCardPath : usbPath;
         boolean currentAvailable = isSd ? sdCardAvailable : usbAvailable;
 
-        // Quick check: if path is already accessible, no work needed
+        // Quick check: if path is already accessible, no work needed.
+        // Use the cheap StatFs+canWrite probe — the touch+rm shell exec
+        // (isMountWritable) blocks up to 2s under FUSE binder contention
+        // from concurrent dir-walks, falsely reporting unmounted and
+        // forcing the slow `sm mount` path even though the volume is fine.
+        // This was the root of the "trips storage selection silently fails"
+        // bug: setTripsStorageType → ensureExternalAvailable → here, and
+        // the 2s timeout returned false → setTripsStorageType returned false.
         if (!force && currentAvailable && currentPath != null) {
-            if (isMountWritable(currentPath)) {
+            if (isPathLikelyMounted(currentPath)) {
                 logDebug(targetClass + " already mounted at: " + currentPath);
                 return true;
             }
@@ -488,7 +495,10 @@ public class StorageManager {
 
                 if ("mounted".equals(state)) {
                     String mountPath = "/storage/" + thisUuid;
-                    if (isMountWritable(mountPath)) {
+                    // Cheap check (no shell fork). See note at the
+                    // already-accessible branch above for why touch+rm is
+                    // unsafe under contention.
+                    if (isPathLikelyMounted(mountPath)) {
                         if (isSd) {
                             sdCardPath = mountPath;
                             sdCardAvailable = true;
@@ -539,7 +549,11 @@ public class StorageManager {
                     String mountPath = "/storage/" + volumeUuid;
                     for (int i = 0; i < 10; i++) {
                         Thread.sleep(500);
-                        if (isMountWritable(mountPath)) {
+                        // Cheap check: 10 × 500ms iterations × 2s shell timeout
+                        // could otherwise consume 25s of fork-bound work that
+                        // itself feeds the FUSE contention. Cheap probe runs
+                        // in microseconds and provides the same liveness signal.
+                        if (isPathLikelyMounted(mountPath)) {
                             if (isSd) {
                                 sdCardPath = mountPath;
                                 sdCardAvailable = true;
@@ -583,6 +597,37 @@ public class StorageManager {
             return false;
         }
         return isMountWritable(sdCardPath);
+    }
+
+    /**
+     * Cheap liveness check for the SD card mount, suitable for the watchdog
+     * tick (called every 15s). Avoids forking a `touch+rm` shell — that
+     * probe blocks for up to 2s under FUSE binder contention from concurrent
+     * dir-walks (recordings/stats, storage/external, etc.) and falsely
+     * reports "unmounted", triggering a remount cascade that itself runs
+     * more shell forks and amplifies the contention.
+     *
+     * <p>Layered check, fail-fast:
+     * <ol>
+     *   <li>Path resolved? Directory exists? — Java {@code File} API, no fork.</li>
+     *   <li>{@code StatFs.getTotalBytes()} — single binder call, ~200µs.</li>
+     *   <li>{@code File.canWrite()} — Java permission check, no fork.</li>
+     * </ol>
+     * Three signals all green = mount is live. The expensive write probe is
+     * reserved for {@link #isMountWritable} which callers invoke when they
+     * are about to actually write.
+     */
+    public boolean isSdCardLikelyMounted() {
+        if (sdCardPath == null) return false;
+        File d = new File(sdCardPath);
+        if (!d.exists() || !d.isDirectory()) return false;
+        try {
+            android.os.StatFs s = new android.os.StatFs(sdCardPath);
+            if (s.getTotalBytes() <= 0) return false;
+        } catch (Throwable t) {
+            return false;
+        }
+        return d.canWrite();
     }
 
     /**
@@ -800,10 +845,20 @@ public class StorageManager {
      * removed — they were the source of the SD/USB confusion.
      */
     public void discoverVolumes() {
-        sdCardPath = null;
-        sdCardAvailable = false;
-        usbPath = null;
-        usbAvailable = false;
+        // Stage detection in local vars — only commit to fields on success.
+        // Previously we nulled sdCardPath / sdCardAvailable at the top, which
+        // meant any transient failure mid-detect (sm timeout, isMountWritable
+        // false-positive under FUSE contention, /proc/mounts read error)
+        // permanently wiped known-good state until the next watchdog tick.
+        // Combined with B5 in the audit, that's the "finds it but can't
+        // mount" failure mode the user reported: sm list-volumes correctly
+        // returned the volume id, but isMountWritable's `touch+rm` probe
+        // timed out under contention so the field was never assigned, and
+        // the daemon ran the rest of the session thinking the SD was gone.
+        String foundSdPath = null;
+        boolean foundSdAvail = false;
+        String foundUsbPath = null;
+        boolean foundUsbAvail = false;
 
         // Method 1: sm list-volumes all
         try {
@@ -829,18 +884,22 @@ public class StorageManager {
                 }
                 String volumeUuid = parts[2];
                 String mountPath = "/storage/" + volumeUuid;
-                if (!isMountWritable(mountPath)) continue;
+                // Use the cheap layered check — the expensive touch+rm probe
+                // here was the source of the false-negative cascade. If a
+                // public:* volume is in `mounted` state per `sm` AND the
+                // path exists with positive StatFs, trust it.
+                if (!isPathLikelyMounted(mountPath)) continue;
 
                 String klass = classifyPublicVolume(major, minor, volumeUuid);
-                if ("SD".equals(klass) && !sdCardAvailable) {
-                    sdCardPath = mountPath;
-                    sdCardAvailable = true;
+                if ("SD".equals(klass) && !foundSdAvail) {
+                    foundSdPath = mountPath;
+                    foundSdAvail = true;
                     learnSdUuid(volumeUuid);
-                    logInfo("Found SD card via sm list-volumes (" + major + ":" + minor + "): " + sdCardPath);
-                } else if ("USB".equals(klass) && !usbAvailable) {
-                    usbPath = mountPath;
-                    usbAvailable = true;
-                    logInfo("Found USB drive via sm list-volumes (" + major + ":" + minor + "): " + usbPath);
+                    logInfo("Found SD card via sm list-volumes (" + major + ":" + minor + "): " + mountPath);
+                } else if ("USB".equals(klass) && !foundUsbAvail) {
+                    foundUsbPath = mountPath;
+                    foundUsbAvail = true;
+                    logInfo("Found USB drive via sm list-volumes (" + major + ":" + minor + "): " + mountPath);
                 }
                 // Keep iterating — both kinds may be present.
             }
@@ -851,22 +910,22 @@ public class StorageManager {
         }
 
         // Method 2: BYD UUID prop is SD-specific. Only use if Method 1 missed SD.
-        if (!sdCardAvailable) {
+        if (!foundSdAvail) {
             String sdUuid = getSystemProperty("sys.byd.mSdcardUuid");
             if (sdUuid != null && !sdUuid.isEmpty()) {
                 String uuidPath = "/storage/" + sdUuid;
-                if (isMountWritable(uuidPath) && !uuidPath.equals(usbPath)) {
-                    sdCardPath = uuidPath;
-                    sdCardAvailable = true;
+                if (isPathLikelyMounted(uuidPath) && !uuidPath.equals(foundUsbPath)) {
+                    foundSdPath = uuidPath;
+                    foundSdAvail = true;
                     learnSdUuid(sdUuid);
-                    logInfo("Found SD card via BYD UUID: " + sdCardPath);
+                    logInfo("Found SD card via BYD UUID: " + uuidPath);
                 }
             }
         }
 
         // Method 3: /proc/mounts for vfat/exfat — classify the source device
         // by its base name (mmcblk* → SD, sd* → USB) before claiming it.
-        if (!sdCardAvailable || !usbAvailable) {
+        if (!foundSdAvail || !foundUsbAvail) {
             try {
                 BufferedReader reader = new BufferedReader(new FileReader("/proc/mounts"));
                 String line;
@@ -880,7 +939,7 @@ public class StorageManager {
                         mountPoint.equals("/boot") || mountPoint.startsWith("/cache")) {
                         continue;
                     }
-                    if (!isMountWritable(mountPoint)) continue;
+                    if (!isPathLikelyMounted(mountPoint)) continue;
 
                     // Strip /dev/block/ prefix and trailing partition number.
                     String base = source;
@@ -891,14 +950,14 @@ public class StorageManager {
                     if (base.startsWith("mmcblk")) klass = "SD";
                     else if (base.startsWith("sd")) klass = "USB";
 
-                    if ("SD".equals(klass) && !sdCardAvailable && !mountPoint.equals(usbPath)) {
-                        sdCardPath = mountPoint;
-                        sdCardAvailable = true;
-                        logInfo("Found SD card via /proc/mounts (" + source + "): " + sdCardPath);
-                    } else if ("USB".equals(klass) && !usbAvailable && !mountPoint.equals(sdCardPath)) {
-                        usbPath = mountPoint;
-                        usbAvailable = true;
-                        logInfo("Found USB drive via /proc/mounts (" + source + "): " + usbPath);
+                    if ("SD".equals(klass) && !foundSdAvail && !mountPoint.equals(foundUsbPath)) {
+                        foundSdPath = mountPoint;
+                        foundSdAvail = true;
+                        logInfo("Found SD card via /proc/mounts (" + source + "): " + mountPoint);
+                    } else if ("USB".equals(klass) && !foundUsbAvail && !mountPoint.equals(foundSdPath)) {
+                        foundUsbPath = mountPoint;
+                        foundUsbAvail = true;
+                        logInfo("Found USB drive via /proc/mounts (" + source + "): " + mountPoint);
                     }
                 }
                 reader.close();
@@ -907,8 +966,37 @@ public class StorageManager {
             }
         }
 
+        // Commit results atomically. Volumes that disappeared since the last
+        // detection do go from non-null → null here; that's correct behavior
+        // (the card was actually pulled). What we avoid is the transient-
+        // failure case where Method 1 found the card via sm list-volumes
+        // but Method 1's writability probe timed out — without staging, that
+        // would have nulled state mid-walk and Method 2/3 wouldn't recover
+        // because they branch on `!sdCardAvailable` (now `!foundSdAvail`,
+        // which preserved the success).
+        sdCardPath = foundSdPath;
+        sdCardAvailable = foundSdAvail;
+        usbPath = foundUsbPath;
+        usbAvailable = foundUsbAvail;
+
         if (!sdCardAvailable) logDebug("No writable SD card found");
         if (!usbAvailable) logDebug("No writable USB drive found");
+    }
+
+    /** Cheap mount-liveness check for any path. Same layered logic as
+     * {@link #isSdCardLikelyMounted} but for arbitrary mount points.
+     * StatFs + canWrite, no shell fork. */
+    private boolean isPathLikelyMounted(String path) {
+        if (path == null) return false;
+        File d = new File(path);
+        if (!d.exists() || !d.isDirectory()) return false;
+        try {
+            android.os.StatFs s = new android.os.StatFs(path);
+            if (s.getTotalBytes() <= 0) return false;
+        } catch (Throwable t) {
+            return false;
+        }
+        return d.canWrite();
     }
     
     /**
@@ -1215,8 +1303,15 @@ public class StorageManager {
 
     /**
      * Save storage limits and storage type to config file.
+     *
+     * <p>Synchronized: the HTTP layer uses a 32-thread pool, so
+     * concurrent setters (setRecordingsLimitMb, setSurveillanceStorageType,
+     * etc.) can race the read-modify-write cycle below. Without this lock
+     * two writers could each read the file, mutate disjoint fields in their
+     * own copy, and the second writer's full-file write would clobber the
+     * first writer's changes.
      */
-    public void saveConfig() {
+    public synchronized void saveConfig() {
         try {
             File configFile = new File(CONFIG_FILE);
             JSONObject config;
@@ -1252,12 +1347,23 @@ public class StorageManager {
             FileWriter writer = new FileWriter(configFile);
             writer.write(config.toString(2));
             writer.close();
-            
+
             configFile.setReadable(true, false);
             configFile.setWritable(true, false);
-            
-            logInfo("Saved storage config: recordings=" + recordingsLimitMb + "MB (" + recordingsStorageType + 
-                "), surveillance=" + surveillanceLimitMb + "MB (" + surveillanceStorageType + 
+
+            // UnifiedConfigManager has its own in-memory cache of this same
+            // file. Without this invalidation, the next updateSection() call
+            // would merge into a stale cached config (still holding the OLD
+            // storage section) and write it back, silently reverting the
+            // SD_CARD/USB selection the user just made.
+            try {
+                com.overdrive.app.config.UnifiedConfigManager.forceReload();
+            } catch (Throwable t) {
+                logWarn("UnifiedConfigManager.forceReload() failed: " + t.getMessage());
+            }
+
+            logInfo("Saved storage config: recordings=" + recordingsLimitMb + "MB (" + recordingsStorageType +
+                "), surveillance=" + surveillanceLimitMb + "MB (" + surveillanceStorageType +
                 "), trips=" + tripsLimitMb + "MB (" + tripsStorageType + ")");
         } catch (Exception e) {
             logError("Could not save storage config: " + e.getMessage());
@@ -2945,8 +3051,27 @@ public class StorageManager {
 
         sdCardWatchdog.scheduleAtFixedRate(() -> {
             try {
-                if (watchSd && !isSdCardMounted()) {
+                // Use the cheap layered check (StatFs + canWrite, no shell
+                // fork) for the watchdog tick. The expensive `touch+rm`
+                // probe in isSdCardMounted() falsely reports unmounted under
+                // FUSE binder contention from concurrent dir-walks, kicking
+                // off a remount cascade that itself spawns more shell forks
+                // and amplifies the contention. The cheap check has zero
+                // such side effects.
+                //
+                // Two-strikes rule: a single negative reading is treated as
+                // a transient probe failure. Only after TWO consecutive
+                // failures do we fire the remount path. This eliminates
+                // the false-positive "card unmounted" log that fires after
+                // every UI settings save (when the page reflexively walks
+                // the SD via /api/storage/external + /api/recordings/stats).
+                if (watchSd && !isSdCardLikelyMounted()) {
                     sdWatchdogConsecutiveFailures++;
+
+                    // First failure: silent, just record and wait for next tick.
+                    if (sdWatchdogConsecutiveFailures < 2) {
+                        return;
+                    }
 
                     // Only log verbosely for the first few failures, then quiet down
                     boolean shouldLog = sdWatchdogConsecutiveFailures <= SD_WATCHDOG_MAX_VERBOSE_FAILURES ||
@@ -2982,9 +3107,12 @@ public class StorageManager {
                         logError("SD card watchdog: remount FAILED - surveillance may use internal fallback");
                     }
                 } else if (watchSd) {
-                    // Card is mounted — reset failure counter
+                    // Card is healthy — reset failure counter (was a single
+                    // transient probe failure, not a real unmount).
                     if (sdWatchdogConsecutiveFailures > 0) {
-                        logInfo("SD card watchdog: card is mounted again");
+                        if (sdWatchdogConsecutiveFailures >= 2) {
+                            logInfo("SD card watchdog: card is mounted again");
+                        }
                         sdWatchdogConsecutiveFailures = 0;
                     }
                 }

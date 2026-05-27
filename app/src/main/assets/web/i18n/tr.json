@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "Resim ayarlandı  özel mesaj göz ardı ediliyor. Bunun yerine bir mesaj kullanmak için resimi temizleyin.",
     "screen_deterrent_image": "Özel görüntü veya GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, 8 MB'ye kadar. Tüm ekranı değiştirir.",
+    "themes_title": "Giovanni Mirulla'nın Temaları",
+    "download_set": "İndir & Koyu",
+    "downloading": "İndirmek",
+    "applied": "İstihbarat!",
+    "failed": "Başarısız",
+    "test_on_screen": "Sınav Ekranı",
     "screen_deterrent_upload": "Yukarı yükleme",
     "screen_deterrent_replace": "Resim değiştir",
     "screen_deterrent_remove": "Fotoğraf çekme",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "Far yak",
     "cmd_find": "Bul",
     "cmd_live": "Canlı",
+    "cmd_recordings": "Kayıtlar",
     "cmd_trunk_open": "Açık bagaj",
     "cmd_trunk_close": "Kapalı bagaj",
     "cmd_trips": "Seyahatler",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n} sa önce",
     "toast_command_sent": "Komut gönderildi",
     "toast_command_failed": "Komut başarısız",
-    "toast_no_location": "Araç konumu mevcut değil",
-    "cmd_recordings": "Kayıtlar"
+    "toast_no_location": "Araç konumu mevcut değil"
   }
 }

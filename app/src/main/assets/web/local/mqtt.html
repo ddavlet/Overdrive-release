@@ -111,11 +111,21 @@
         .empty-state { text-align: center; padding: 48px 24px; color: var(--text-muted); }
         .empty-state svg { width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.4; }
         .empty-state p { font-size: 14px; margin-bottom: 16px; }
-        .telemetry-table { width: 100%; border-collapse: collapse; }
+        /* table-layout:fixed so the two columns honor the parent width instead
+           of expanding to fit the longest unbreakable value (radar_distances
+           JSON, vd_timestamp ISO strings, VIN, etc.). Without this the table
+           grows past the viewport on mobile and the card — which has
+           overflow:hidden — clips its right edge and reads as off-center. */
+        .telemetry-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         .telemetry-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-size: 13px; }
         .telemetry-table tr:last-child td { border-bottom: none; }
-        .telemetry-table td:first-child { color: var(--text-secondary); font-weight: 500; }
-        .telemetry-table td:last-child { text-align: right; font-family: 'JetBrains Mono', monospace; color: var(--text-primary); }
+        .telemetry-table td:first-child { color: var(--text-secondary); font-weight: 500; width: 42%; word-break: break-word; }
+        .telemetry-table td:last-child { text-align: right; font-family: 'JetBrains Mono', monospace; color: var(--text-primary); word-break: break-all; overflow-wrap: anywhere; }
+        @media (max-width: 540px) {
+            .telemetry-table td { padding: 8px 10px; font-size: 12px; }
+            .telemetry-table td:first-child { width: 46%; }
+            .telemetry-table td:last-child { font-size: 12px; }
+        }
         /* Internal scroller — payload now carries ~100 keys when the SDK is fully populated.
            Cap at 60vh so the card fits inside both 1080x1920 portrait and 1920x1080 landscape
            BYD layouts without pushing the page-tabs offscreen. */

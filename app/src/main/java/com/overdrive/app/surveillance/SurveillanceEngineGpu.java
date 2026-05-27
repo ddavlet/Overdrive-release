@@ -434,8 +434,34 @@ public class SurveillanceEngineGpu {
     // stopRecording() (recorder drainer thread) and reset by enable() / disable().
     // Plain array slot publication wasn't safe-published across threads. Readers
     // must tolerate null (they already do — null check before deref).
-    private final java.util.concurrent.atomic.AtomicReferenceArray<java.util.List<com.overdrive.app.ai.Detection>> lastYoloDetections =
+    //
+    // <b>Single-atomic publication:</b> the detection list and the coord-space
+    // frame height are packed into one immutable {@link YoloPublication} record
+    // so a single AtomicReference write/read covers both. The earlier version
+    // used two parallel atomics ({@code lastYoloDetections} and a sibling
+    // {@code lastYoloFrameHeight}); the writer published list-then-height, the
+    // reader read list-then-height in the SAME order, but a re-publish from
+    // the AI thread between the reader's two reads could compose new
+    // detections with the OLD height (or vice-versa). Re-audit caught a torn-
+    // read window where mosaic detections (240-space) got read with a
+    // foveated frame-height (640) → reader assumed foveated FOV scaling →
+    // 3-5× distance overestimate intermittently. One atomic eliminates the
+    // window — the reader sees either the old YoloPublication or the new
+    // one, never a mix.
+    private final java.util.concurrent.atomic.AtomicReferenceArray<YoloPublication> lastYoloPublication =
             new java.util.concurrent.atomic.AtomicReferenceArray<>(MotionPipelineV2.NUM_QUADRANTS);
+
+    /** Immutable snapshot of one quadrant's most recent YOLO output, plus
+     *  the coord-space frame height the detections were computed against.
+     *  Published as a unit so cross-thread readers can't see a torn state. */
+    private static final class YoloPublication {
+        final java.util.List<com.overdrive.app.ai.Detection> detections;
+        final int frameHeightPx;
+        YoloPublication(java.util.List<com.overdrive.app.ai.Detection> detections, int frameHeightPx) {
+            this.detections = detections;
+            this.frameHeightPx = frameHeightPx;
+        }
+    }
     // Track which quadrant had the last event (for event-end baseline update)
     private int lastEventQuadrant = -1;
     
@@ -1106,6 +1132,17 @@ public class SurveillanceEngineGpu {
             for (int qi = 0; qi < MotionPipelineV2.NUM_QUADRANTS; qi++) {
                 final int q = qi;
                 aiScheduler.schedule(() -> {
+                    // Outer-scheduler ACC-ON short-circuit: if ACC has turned
+                    // ON between frame-30 enqueue and this tick (up to 1.5s
+                    // for the 4th quadrant), don't even pay the
+                    // aiExecutor.execute() dispatch cost. The inner lambda
+                    // re-checks anyway as a defense in depth.
+                    if (!active || com.overdrive.app.monitor.AccMonitor.isAccOn()) {
+                        if (q == 0) {
+                            logger.info("Baseline seed dispatch skipped (surveillance inactive / ACC ON)");
+                        }
+                        return;
+                    }
                     aiExecutor.execute(() -> {
                         // FIX (A8/B3): snapshot detector at lambda entry — see
                         // runAiOnQuadrant for rationale. Toggling AI off via
@@ -1115,6 +1152,22 @@ public class SurveillanceEngineGpu {
                         if (detectorSnap == null || !aiEnabled) {
                             if (q == 0) {
                                 logger.info("Baseline seed skipped (detector closed)");
+                            }
+                            return;
+                        }
+                        // ACC-ON guard: the staggered seed has up to ~1.5s of
+                        // dispatch lag (4 quadrants × 500ms apart on
+                        // aiScheduler, then re-dispatch onto aiExecutor). If
+                        // ACC turns ON between schedule time and now, the
+                        // surveillance session is logically over and a YOLO
+                        // inference here would (a) burn CPU during a window
+                        // where the user expects minimal load and (b) write
+                        // baseline state for a session that's about to be
+                        // torn down. Skip and let the next ACC-OFF session
+                        // re-seed naturally.
+                        if (!active || com.overdrive.app.monitor.AccMonitor.isAccOn()) {
+                            if (q == 0) {
+                                logger.info("Baseline seed skipped (surveillance inactive / ACC ON)");
                             }
                             return;
                         }
@@ -1165,13 +1218,21 @@ public class SurveillanceEngineGpu {
                         if (NativeMotion.trackerHasActiveTrack(q)) {
                             float[] trackBox = NativeMotion.trackerGetTrackBox(q);
                             if (trackBox != null && (int) trackBox[5] == 0) { // person only
+                                // ZONE GATE: don't grant immunity to a tracker
+                                // bbox that's outside the user's configured
+                                // detection zone. Without this check, a person
+                                // tracked in row 0-1 (far from the car) would
+                                // bypass the row gate during any brightness-
+                                // suppression frame — recording fires for an
+                                // object the user explicitly excluded.
+                                if (!trackerInZone(q)) continue;
                                 anyMotion = true;
                                 if (maxThreat < MotionPipelineV2.THREAT_MEDIUM) {
                                     maxThreat = MotionPipelineV2.THREAT_MEDIUM;
                                 }
                                 if (frameCount % 50 == 0) {
-                                    logger.info("Headlight sweep immunity: Q" + q + 
-                                            " [" + MotionPipelineV2.QUADRANT_NAMES[q] + 
+                                    logger.info("Headlight sweep immunity: Q" + q +
+                                            " [" + MotionPipelineV2.QUADRANT_NAMES[q] +
                                             "] suppressed but tracker holds person lock");
                                 }
                                 break;
@@ -1182,30 +1243,54 @@ public class SurveillanceEngineGpu {
             }
         }
         
+        // Per-tick proximity state update — runs ONCE per quadrant per
+        // processFrameV2 iteration, BEFORE any log site reads
+        // proximityForQuadrant. Without this, multiple downstream log sites
+        // in the same tick (per-quadrant summary, motion-start,
+        // motion-building, recording-trigger) would each clobber each
+        // other's prevLowestBlockY in the old unified proximityForQuadrant,
+        // collapsing dt to 0 and silently breaking the trend signal
+        // (audit H2). Runs unconditionally — quiet quadrants need their
+        // stale prev state cleared too (audit M4), otherwise a 30-second-
+        // old prevRow with a fresh nowMs produces a bogus APPROACHING the
+        // next time blocks fire in that quadrant.
+        for (int q = 0; q < MotionPipelineV2.NUM_QUADRANTS; q++) {
+            updateProximityState(q, results[q]);
+        }
+
         // --- Diagnostic: Log per-quadrant pipeline results every time motion is detected ---
         // This shows exactly what the pipeline saw and why it did/didn't trigger.
         if (anyMotion || filterDebugEnabled) {
             String[] threatNames = {"NONE", "LOW(pass)", "MEDIUM(approach)", "HIGH(loiter)"};
             int bestQ = pipelineV2.getHighestThreatQuadrant();
-            
+
             for (int q = 0; q < MotionPipelineV2.NUM_QUADRANTS; q++) {
                 MotionPipelineV2.QuadrantResult r = results[q];
                 if (r.activeBlocks == 0 && !r.brightnessSuppressed) continue;
-                
+
                 String qName = MotionPipelineV2.QUADRANT_NAMES[q];
-                
-                // Convert centroid block coords to estimated distance in meters
-                float estDistM = estimateDistanceFromCentroid(q, r.centroidY);
-                String distStr = (r.componentSize > 0) ? String.format("~%.1fm", estDistM) : "n/a";
-                
-                // Zone cutoff in human terms
+
+                // SOTA proximity (bbox-height when YOLO has fired, tier+trend
+                // pre-YOLO). Replaces the previous centroid-Y geometric
+                // distance which was producing 0.4–0.9 m noise for objects
+                // actually 3–8 m away (wrong projection model + Y=horizon
+                // assumption + foot-vs-torso confusion). Read-only here —
+                // state was updated above for this tick.
+                DistanceEstimator.ProximityEstimate proxQ = proximityForQuadrant(q, r);
+                String proxStr = proxQ.describe();
+
+                // Zone cutoff is row-based natively (maxDistanceRow), so the
+                // metric expression here is purely cosmetic. Keep the legacy
+                // geometric estimate for that single label so users have
+                // something stable to read against — it's wrong but it's
+                // what the existing UI configuration text refers to.
                 int maxRow = pipelineV2Config != null ? pipelineV2Config.maxDistanceRow : 0;
-                float zoneCutoffDist = estimateDistanceFromCentroid(q, maxRow);
                 String zoneStr = config != null ? config.getDetectionZone() : "?";
-                String zoneLimitStr = maxRow > 0 ? String.format("%s(<%s ~%.1fm)", zoneStr, 
-                        maxRow == 4 ? "close" : maxRow == 2 ? "normal" : "extended", zoneCutoffDist) 
+                String zoneLimitStr = maxRow > 0
+                        ? String.format("%s(<%s)", zoneStr,
+                                maxRow == 4 ? "close" : maxRow == 2 ? "normal" : "extended")
                         : zoneStr + "(no limit)";
-                
+
                 if (r.brightnessSuppressed) {
                     logger.debug(String.format(
                         "  [%s] BRIGHTNESS_SUPPRESSED luma=%.0f (light change detected)",
@@ -1216,8 +1301,8 @@ public class SurveillanceEngineGpu {
                         qName, r.activeBlocks));
                 } else if (r.motionDetected) {
                     logger.info(String.format(
-                        "  [%s] %s | dist=%s | blocks: active=%d confirmed=%d component=%d | zone=%s",
-                        qName, threatNames[r.threatLevel], distStr,
+                        "  [%s] %s | prox=%s | blocks: active=%d confirmed=%d component=%d | zone=%s",
+                        qName, threatNames[r.threatLevel], proxStr,
                         r.activeBlocks, r.confirmedBlocks, r.componentSize, zoneLimitStr));
                 } else if (r.activeBlocks > 0) {
                     // Motion was detected at block level but rejected by later stages
@@ -1228,7 +1313,7 @@ public class SurveillanceEngineGpu {
                         reason = String.format("component too small (%d blocks, need %d)", r.componentSize,
                                 pipelineV2Config != null ? pipelineV2Config.minComponentSize : 1);
                     } else if (maxRow > 0 && r.centroidY < maxRow) {
-                        reason = String.format("too far away (%s, zone limit ~%.1fm)", distStr, zoneCutoffDist);
+                        reason = String.format("outside zone (%s)", zoneLimitStr);
                     } else if (r.confirmedBlocks < (pipelineV2Config != null ? pipelineV2Config.alarmBlockThreshold : 2)) {
                         reason = String.format("below alarm threshold (%d blocks, need %d)", r.confirmedBlocks,
                                 pipelineV2Config != null ? pipelineV2Config.alarmBlockThreshold : 2);
@@ -1236,8 +1321,8 @@ public class SurveillanceEngineGpu {
                         reason = "passing motion (" + threatNames[r.threatLevel] + ", ignored)";
                     }
                     logger.debug(String.format(
-                        "  [%s] REJECTED: %s | dist=%s active=%d confirmed=%d",
-                        qName, reason, distStr, r.activeBlocks, r.confirmedBlocks));
+                        "  [%s] REJECTED: %s | prox=%s active=%d confirmed=%d",
+                        qName, reason, proxStr, r.activeBlocks, r.confirmedBlocks));
                 }
             }
         }
@@ -1270,12 +1355,19 @@ public class SurveillanceEngineGpu {
                 peakThreatDuringSequence = maxThreat;
                 int bestQ = pipelineV2.getHighestThreatQuadrant();
                 MotionPipelineV2.QuadrantResult bestR = bestQ >= 0 ? results[bestQ] : null;
-                float estDist = bestQ >= 0 && bestR != null ? estimateDistanceFromCentroid(bestQ, bestR.centroidY) : -1;
+                // SOTA proximity: bbox-height (post-YOLO) or tier+trend (pre-YOLO).
+                // At motion-start YOLO has almost certainly not fired yet, so this
+                // log line will read e.g. "near approaching" rather than fabricate
+                // a metric distance from the motion-block centroid.
+                DistanceEstimator.ProximityEstimate prox = bestQ >= 0
+                        ? proximityForQuadrant(bestQ, bestR)
+                        : DistanceEstimator.ProximityEstimate.tierOnly(
+                                DistanceEstimator.Tier.UNKNOWN, DistanceEstimator.Trend.UNKNOWN);
                 String threatStr = maxThreat >= MotionPipelineV2.THREAT_HIGH ? "HIGH(loiter)" : "MEDIUM(approach)";
                 long needed = maxThreat >= MotionPipelineV2.THREAT_HIGH ? SUSTAINED_MOTION_BASE_MS : loiteringTimeMs;
-                logger.info(String.format("Motion started: %s camera, threat=%s, dist=~%.1fm, need %.1fs sustained...",
+                logger.info(String.format("Motion started: %s camera, threat=%s, prox=%s, need %.1fs sustained...",
                         bestQ >= 0 ? MotionPipelineV2.QUADRANT_NAMES[bestQ] : "?",
-                        threatStr, estDist, needed / 1000.0));
+                        threatStr, prox.describe(), needed / 1000.0));
             }
             
             long motionDuration = now - firstMotionTime;
@@ -1298,10 +1390,13 @@ public class SurveillanceEngineGpu {
                     String[] threatNames = {"NONE", "LOW(pass)", "MEDIUM(approach)", "HIGH(loiter)"};
                     int bestQ = pipelineV2.getHighestThreatQuadrant();
                     MotionPipelineV2.QuadrantResult bestR = bestQ >= 0 ? results[bestQ] : null;
-                    float estDist = bestQ >= 0 && bestR != null ? estimateDistanceFromCentroid(bestQ, bestR.centroidY) : -1;
-                    logger.info(String.format("Motion building: %.1fs / %.1fs | threat=%s | dist=~%.1fm | loiterSetting=%ds",
+                    DistanceEstimator.ProximityEstimate prox = bestQ >= 0
+                            ? proximityForQuadrant(bestQ, bestR)
+                            : DistanceEstimator.ProximityEstimate.tierOnly(
+                                    DistanceEstimator.Tier.UNKNOWN, DistanceEstimator.Trend.UNKNOWN);
+                    logger.info(String.format("Motion building: %.1fs / %.1fs | threat=%s | prox=%s | loiterSetting=%ds",
                             motionDuration / 1000.0, requiredDuration / 1000.0,
-                            threatNames[maxThreat], estDist, (int)(loiteringTimeMs / 1000)));
+                            threatNames[maxThreat], prox.describe(), (int)(loiteringTimeMs / 1000)));
                 }
             }
             
@@ -1334,10 +1429,13 @@ public class SurveillanceEngineGpu {
                     String qName = bestQ >= 0 ? MotionPipelineV2.QUADRANT_NAMES[bestQ] : "?";
                     String[] threatNames = {"NONE", "LOW", "MEDIUM", "HIGH"};
                     MotionPipelineV2.QuadrantResult r = bestQ >= 0 ? results[bestQ] : null;
-                    float estDist = bestQ >= 0 && r != null ? estimateDistanceFromCentroid(bestQ, r.centroidY) : -1;
-                    addFilterLogEntry(String.format("[%s] TRIGGER: %s threat=%s dist=~%.1fm active=%d confirmed=%d component=%d sustained=%.1fs",
+                    DistanceEstimator.ProximityEstimate prox = bestQ >= 0
+                            ? proximityForQuadrant(bestQ, r)
+                            : DistanceEstimator.ProximityEstimate.tierOnly(
+                                    DistanceEstimator.Tier.UNKNOWN, DistanceEstimator.Trend.UNKNOWN);
+                    addFilterLogEntry(String.format("[%s] TRIGGER: %s threat=%s prox=%s active=%d confirmed=%d component=%d sustained=%.1fs",
                             new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date(now)),
-                            qName, threatNames[maxThreat], estDist,
+                            qName, threatNames[maxThreat], prox.describe(),
                             r != null ? r.activeBlocks : 0, r != null ? r.confirmedBlocks : 0,
                             r != null ? r.componentSize : 0, motionDuration / 1000.0));
                 }
@@ -1440,11 +1538,17 @@ public class SurveillanceEngineGpu {
                         motionDetections++;
                         int bestQ = pipelineV2.getHighestThreatQuadrant();
                         // If no quadrant has motion (e.g., tracker held through flash),
-                        // fall back to the quadrant with an active tracker lock
+                        // fall back to the quadrant with an active tracker lock.
+                        // ZONE GATE: only consider trackers whose bbox bottom is
+                        // in-zone — otherwise an out-of-zone person locked by
+                        // the tracker can leak past the user's "close"/"normal"
+                        // setting and trigger recording. trackerInZone() returns
+                        // true when the gate is disabled ("extended") so this
+                        // doesn't change behaviour for users who chose extended.
                         if (bestQ < 0) {
                             for (int tq = 0; tq < MotionPipelineV2.NUM_QUADRANTS; tq++) {
                                 try {
-                                    if (NativeMotion.trackerHasActiveTrack(tq)) {
+                                    if (NativeMotion.trackerHasActiveTrack(tq) && trackerInZone(tq)) {
                                         bestQ = tq;
                                         break;
                                     }
@@ -1452,37 +1556,45 @@ public class SurveillanceEngineGpu {
                             }
                         }
                         String qName = bestQ >= 0 ? MotionPipelineV2.QUADRANT_NAMES[bestQ] : "?";
-                        String triggerSource = (pipelineV2.getMaxThreatLevel() >= MotionPipelineV2.THREAT_MEDIUM) 
+                        String triggerSource = (pipelineV2.getMaxThreatLevel() >= MotionPipelineV2.THREAT_MEDIUM)
                                 ? "motion" : "tracker";
                         String[] threatNames = {"NONE", "LOW(pass)", "MEDIUM(approach)", "HIGH(loiter)"};
                         MotionPipelineV2.QuadrantResult bestResult = bestQ >= 0 ? results[bestQ] : null;
-                        
-                        // Estimate distance from centroid position
-                        float estDist = bestQ >= 0 && bestResult != null ? 
-                                estimateDistanceFromCentroid(bestQ, bestResult.centroidY) : -1;
-                        String distStr = estDist > 0 ? String.format("~%.1fm", estDist) : "unknown";
-                        
+
+                        // SOTA proximity: prefers post-YOLO bbox-height inference,
+                        // falls back to discrete tier+trend pre-YOLO. The trigger
+                        // gate itself doesn't depend on this value (zone gating is
+                        // row-based natively); this is for the human-readable log
+                        // line and the downstream notification copy.
+                        DistanceEstimator.ProximityEstimate prox = bestQ >= 0
+                                ? proximityForQuadrant(bestQ, bestResult)
+                                : DistanceEstimator.ProximityEstimate.tierOnly(
+                                        DistanceEstimator.Tier.UNKNOWN, DistanceEstimator.Trend.UNKNOWN);
+                        String proxStr = prox.describe();
+
                         String detectionZone = config != null ? config.getDetectionZone() : "?";
                         int sensitivityLevel = config != null ? config.getSensitivityLevel() : -1;
                         int loiteringSec = config != null ? config.getLoiteringTimeSeconds() : -1;
                         int maxRow = pipelineV2Config != null ? pipelineV2Config.maxDistanceRow : 0;
-                        float zoneLimitDist = bestQ >= 0 ? estimateDistanceFromCentroid(bestQ, maxRow) : -1;
-                        
+                        String zoneLimitStr = maxRow > 0
+                                ? (maxRow == 4 ? "close" : maxRow == 2 ? "normal" : "extended")
+                                : "none";
+
                         logger.info(String.format(
                             ">>> RECORDING TRIGGERED <<<\n" +
-                            "  Camera: %s | Threat: %s | Distance: %s | Sustained: %.1fs | Source: %s\n" +
+                            "  Camera: %s | Threat: %s | Proximity: %s | Sustained: %.1fs | Source: %s\n" +
                             "  Blocks: active=%d, confirmed=%d, component=%d\n" +
                             "  Settings: sensitivity=%d, zone=%s (limit %s), loiterTime=%ds\n" +
-                            "  Why: threat %s >= MEDIUM ✓, duration %.1fs >= %.1fs ✓, distance %s within zone ✓",
-                            qName, threatNames[maxThreat], distStr, motionDuration / 1000.0, triggerSource,
+                            "  Why: threat %s >= MEDIUM ✓, duration %.1fs >= %.1fs ✓, proximity %s within zone ✓",
+                            qName, threatNames[maxThreat], proxStr, motionDuration / 1000.0, triggerSource,
                             bestResult != null ? bestResult.activeBlocks : 0,
                             bestResult != null ? bestResult.confirmedBlocks : 0,
                             bestResult != null ? bestResult.componentSize : 0,
                             sensitivityLevel, detectionZone,
-                            maxRow > 0 ? String.format("~%.1fm", zoneLimitDist) : "none",
+                            zoneLimitStr,
                             loiteringSec,
                             threatNames[maxThreat], motionDuration / 1000.0, requiredDuration / 1000.0,
-                            distStr));
+                            proxStr));
                         
                         recordingStopTime = now + postRecordMs;
                         startRecording();
@@ -1594,7 +1706,13 @@ public class SurveillanceEngineGpu {
                         if (NativeMotion.trackerHasActiveTrack(q)) {
                             float[] trackBox = NativeMotion.trackerGetTrackBox(q);
                             if (trackBox != null && (int) trackBox[5] == 0) { // person only
-                                trackerActive = true;
+                                // ZONE GATE: only extend gap tolerance for an
+                                // in-zone person. An out-of-zone tracker lock
+                                // shouldn't keep the motion sequence alive
+                                // past the normal 2s gap.
+                                if (trackerInZone(q)) {
+                                    trackerActive = true;
+                                }
                             }
                         }
                     } catch (Exception ignored) {}
@@ -1621,10 +1739,11 @@ public class SurveillanceEngineGpu {
                         motionDetections++;
                         int bestQ = pipelineV2.getHighestThreatQuadrant();
                         if (bestQ < 0) {
-                            // No quadrant has motion right now — use the last known active quadrant
+                            // No quadrant has motion right now — use the last known active quadrant.
+                            // ZONE GATE: only fall back to trackers whose bbox bottom is in-zone.
                             for (int tq = 0; tq < MotionPipelineV2.NUM_QUADRANTS; tq++) {
                                 try {
-                                    if (NativeMotion.trackerHasActiveTrack(tq)) { bestQ = tq; break; }
+                                    if (NativeMotion.trackerHasActiveTrack(tq) && trackerInZone(tq)) { bestQ = tq; break; }
                                 } catch (Exception ignored) {}
                             }
                         }
@@ -1693,8 +1812,13 @@ public class SurveillanceEngineGpu {
                     if (NativeMotion.trackerHasActiveTrack(q)) {
                         float[] trackBox = NativeMotion.trackerGetTrackBox(q);
                         if (trackBox != null && (int) trackBox[5] == 0) { // class 0 = person only
-                            trackerHolding = true;
-                            break;
+                            // ZONE GATE: only let an in-zone tracker hold the
+                            // post-record window open. An out-of-zone lock
+                            // shouldn't keep recording alive after motion ends.
+                            if (trackerInZone(q)) {
+                                trackerHolding = true;
+                                break;
+                            }
                         }
                     }
                 } catch (Exception ignored) {}
@@ -1845,6 +1969,16 @@ public class SurveillanceEngineGpu {
                                 logger.info("Lighting-transition baseline refresh skipped (detector closed)");
                                 return;
                             }
+                            // ACC-ON guard: lambda is dispatched onto the
+                            // single-thread aiExecutor and may sit behind
+                            // an in-flight detect() for up to ~300ms. If
+                            // ACC has turned ON in that window, drop the
+                            // refresh — the next ACC-OFF session's frame
+                            // 30 baseline seed will re-cover this case.
+                            if (!active || com.overdrive.app.monitor.AccMonitor.isAccOn()) {
+                                logger.info("Lighting-transition baseline refresh skipped (surveillance inactive / ACC ON)");
+                                return;
+                            }
                             logger.info("Refreshing detection baseline (lighting transition)...");
                             int qW = THUMBNAIL_WIDTH / 2;
                             int qH = THUMBNAIL_HEIGHT / 2;
@@ -1911,6 +2045,14 @@ public class SurveillanceEngineGpu {
                                     final YoloDetector detectorSnap = yoloDetector;
                                     if (detectorSnap == null || !aiEnabled) {
                                         logger.debug("Post-suppression baseline refresh skipped (detector closed)");
+                                        return;
+                                    }
+                                    // ACC-ON guard — see baseline-seed lambda for
+                                    // rationale. Same dispatch-lag race; skip if
+                                    // surveillance was torn down before the
+                                    // executor reached this task.
+                                    if (!active || com.overdrive.app.monitor.AccMonitor.isAccOn()) {
+                                        logger.debug("Post-suppression baseline refresh skipped (surveillance inactive / ACC ON)");
                                         return;
                                     }
                                     try {
@@ -2108,6 +2250,21 @@ public class SurveillanceEngineGpu {
                     isAiRunning.set(false);
                     return;
                 }
+                // ACC-ON guard. processFrameV2's caller (processFrame) ran the
+                // active+isAccOn() gate, but the aiExecutor lambda can be
+                // scheduled while ACC was still OFF and pulled off the queue
+                // up to ~250-300ms later (one in-flight detect() ahead of us).
+                // If ACC turned ON in that window — typical for the
+                // ACC-OFF→ON transition with a motion event in flight — we
+                // must NOT run inference: it (a) burns CPU during a window
+                // where surveillance is logically disabled, (b) writes
+                // lastYoloPublication / actor state for a session that's
+                // about to be torn down, polluting the next session's first
+                // frames. Drop the detect() and the downstream writes.
+                if (!active || com.overdrive.app.monitor.AccMonitor.isAccOn()) {
+                    isAiRunning.set(false);
+                    return;
+                }
 
                 boolean detectPerson = true, detectCar = true, detectBike = true;
                 if (classFilter != null && classFilter.length > 0) {
@@ -2249,10 +2406,13 @@ public class SurveillanceEngineGpu {
                                     " static objects suppressed, " + baselineFiltered.size() + " new/moved pass");
                         }
                         
-                        // Store last detections for event-end baseline update (use unfiltered
-                        // motionFiltered list — baseline update needs to see ALL objects including
-                        // those that were suppressed, so it can maintain/update their entries)
-                        lastYoloDetections.set(qIdx, new java.util.ArrayList<>(motionFiltered));
+                        // Store last detections + coord-space frame height for the
+                        // event-end baseline update AND DistanceEstimator's bbox-height
+                        // inference. Single atomic publication so the reader can't
+                        // see new detections paired with stale frame height (or
+                        // vice-versa). qH=240 for mosaic, qH=640 for foveated.
+                        lastYoloPublication.set(qIdx, new YoloPublication(
+                                new java.util.ArrayList<>(motionFiltered), qH));
                         lastEventQuadrant = qIdx;
                         
                         // THREAT-LEVEL DECISION MATRIX (AI background subtraction gate):
@@ -2889,17 +3049,353 @@ public class SurveillanceEngineGpu {
      */
     private float estimateDistanceFromCentroid(int quadrant, float centroidBlockY) {
         if (config == null) return -1;
-        
+
         // Convert block Y to pixel Y within the quadrant
         // Block size is 32px, centroid is center of the block cluster
         float pixelY = centroidBlockY * GRID_BLOCK_SIZE + (GRID_BLOCK_SIZE / 2.0f);
-        
+
         // Convert quadrant-local pixel Y to global mosaic Y
         // Mosaic layout: top row = quadrants 0,1; bottom row = quadrants 2,3
         int quadrantOffsetY = (quadrant >= 2) ? (THUMBNAIL_HEIGHT / 2) : 0;
         int globalY = quadrantOffsetY + (int) pixelY;
-        
+
         return config.estimateDistanceForQuadrant(quadrant, globalY);
+    }
+
+    // ===== SOTA proximity estimation =====
+    //
+    // Per-quadrant tracking state for the trend computation. lowestY is the
+    // row of the lowest active motion block on the previous tick; the trend
+    // is the sign of (now - then). Mutated EXACTLY ONCE per processFrameV2
+    // tick by {@link #updateProximityState}; downstream log sites within the
+    // same tick read {@link #cachedTrend} (the result of that one update)
+    // rather than re-mutating these fields. See audit H2.
+    private final int[] prevLowestBlockY = new int[]{-1, -1, -1, -1};
+    private final long[] prevLowestBlockYAtMs = new long[]{0, 0, 0, 0};
+
+    // Effective vertical FOV after the BYD AVM HAL's dewarp. Stored
+    // per-quadrant because front/rear cameras (ultra-wide fisheye in the
+    // grille and rear plate) carry a wider vertical FOV than the
+    // mirror-housing side cameras. A single global constant inflated
+    // side-camera distances by ~70% per the validation analysis;
+    // per-quadrant values close that gap with no calibration cost.
+    //
+    // Foveated 640×640 crops are a moving window inside one tile, so
+    // their effective vertical FOV is smaller —
+    // {@code per_quadrant_FOV × (CROP_SIZE / camStripHeight)}, computed
+    // dynamically (Seal stripHeight=960 → 0.667; Tang stripHeight=720
+    // → 0.889).
+    //
+    // Quadrant order: 0=front, 1=right, 2=rear, 3=left.
+    private static final int FOVEATED_CROP_SIZE_PX = 640;  // matches FoveatedCropper.CROP_SIZE
+    private static final float[] DEFAULT_VERTICAL_FOV_DEG = { 115f, 95f, 115f, 95f };
+
+    /**
+     * Per-vehicle camera-tile height in pixels (Seal=960, Tang=720).
+     * Set by {@link #setCameraStripHeight} during pipeline init; used
+     * to compute the foveated-crop FOV scale dynamically.
+     */
+    private volatile int cameraStripHeightPx = 960;  // Seal default
+    /**
+     * Per-quadrant vertical FOV in degrees. Set by
+     * {@link #setCameraVerticalFovDeg(float[])} from the active
+     * {@link com.overdrive.app.camera.CameraProfile}.
+     */
+    private volatile float[] cameraVerticalFovDeg = DEFAULT_VERTICAL_FOV_DEG.clone();
+
+    /**
+     * Configure the per-vehicle camera-tile height so the foveated-crop
+     * FOV scaling is correct. Without this, the foveated path uses a
+     * Seal-specific 640/960 ratio and reads ~30% long on Tang.
+     */
+    public void setCameraStripHeight(int stripHeightPx) {
+        if (stripHeightPx > 0) this.cameraStripHeightPx = stripHeightPx;
+    }
+
+    /**
+     * Configure per-quadrant vertical FOV (degrees) for the
+     * bbox-height distance inference. Source: the active
+     * {@link com.overdrive.app.camera.CameraProfile}'s
+     * {@code getVerticalFovDeg(q)} values, written once during pipeline
+     * init. Out-of-shape input is ignored (defaults retained).
+     */
+    public void setCameraVerticalFovDeg(float[] fovDegPerQuadrant) {
+        if (fovDegPerQuadrant != null && fovDegPerQuadrant.length == 4) {
+            float[] copy = new float[4];
+            for (int i = 0; i < 4; i++) {
+                copy[i] = fovDegPerQuadrant[i] > 0 ? fovDegPerQuadrant[i] : DEFAULT_VERTICAL_FOV_DEG[i];
+            }
+            this.cameraVerticalFovDeg = copy;
+        }
+    }
+
+    /**
+     * True iff the NCC tracker's bbox in {@code quadrant} sits inside the
+     * user's configured detection zone. The motion-block path is gated
+     * by {@code maxDistanceRow} natively + via {@link #applyQuadrantOverrides};
+     * the NCC tracker bbox isn't, so an out-of-zone tracker lock can
+     * leak past the zone gate via four paths:
+     *
+     * <ul>
+     *   <li>brightness-suppression immunity ({@code !anyMotion} → forced
+     *       {@code anyMotion=true} when a tracker has a person lock)</li>
+     *   <li>{@code bestQ} fallback when {@code getHighestThreatQuadrant()}
+     *       returns -1 because every quadrant got demoted by the row gate</li>
+     *   <li>gap-tolerance extension ({@code trackerActive} extends 2s gap
+     *       to 4s)</li>
+     *   <li>post-record extension ({@code trackerHolding} keeps recording
+     *       alive past motion-end)</li>
+     * </ul>
+     *
+     * <p>Each of those gives recording a way to fire / persist for an
+     * object outside the user's chosen zone. Gating those four sites on
+     * {@code trackerInZone(q)} preserves the legitimate use cases (a
+     * person walking in close gets locked and held through a headlight
+     * sweep) while honouring the user's zone choice.
+     *
+     * <p>The check uses the bbox's <b>bottom edge</b> in row units against
+     * the effective {@code maxDistanceRow} for that quadrant. Bbox-bottom
+     * mirrors what the row gate uses for motion centroids — bottom-of-
+     * silhouette ≈ closest point on the object to the camera ground plane.
+     * Returns true when zone gating is disabled ({@code maxRow == 0},
+     * "extended"), or when {@code maxRow} is unset.
+     *
+     * @return true if the tracker bbox bottom is at or below {@code maxRow},
+     *         OR the zone gate is off, OR the tracker has no lock
+     *         (in-zone is moot — caller will skip via the existing
+     *         {@code trackerHasActiveTrack} check). Returns false only
+     *         when an active tracker lock is OUTSIDE the configured zone.
+     */
+    private boolean trackerInZone(int quadrant) {
+        if (config == null) return true;  // no config → no gate
+        // Resolve the per-quadrant effective zone (per-quadrant override
+        // wins over global). maxDistanceRowForZone returns 0 for "extended"
+        // (gate off), 2 for "normal", 4 for "close". Higher = stricter.
+        String effZone = config.getEffectiveDetectionZone(quadrant);
+        int maxRow = MotionPipelineV2.Config.maxDistanceRowForZone(effZone);
+        if (maxRow <= 0) return true;  // gate disabled
+
+        try {
+            float[] trackBox = NativeMotion.trackerGetTrackBox(quadrant);
+            if (trackBox == null || trackBox.length < 7) return false;
+            // trackBox[6] == active flag; if no active lock, "in zone" is
+            // vacuously true so callers don't double-gate themselves.
+            if (trackBox[6] <= 0) return true;
+            // bbox y is in 0..240 quadrant pixel space; row index = y / 32.
+            // Bottom edge of bbox in row units = (y + h) / 32.
+            float bottomRow = (trackBox[1] + trackBox[3]) / (float) GRID_BLOCK_SIZE;
+            return bottomRow >= maxRow;
+        } catch (Throwable t) {
+            // Any native failure → fail safe to "in zone" so we don't
+            // accidentally suppress a legitimate trigger because the
+            // tracker JNI burped.
+            return true;
+        }
+    }
+
+    /**
+     * Edge-band sentinel for the tile-edge guard. Validation analysis
+     * showed the BYD HAL fisheye dewarp's angular-density-per-pixel is
+     * roughly uniform in the central 60% of a tile and degrades steeply
+     * in the outer 20% on each side. When the closest detection's bbox
+     * center lands in that outer band we don't trust the bbox-height
+     * inference and fall back to tier+trend.
+     *
+     * <p>Returns true if the closest predicted detection's bbox center
+     * is in the outermost {@code edgeFrac} of the frame width on either
+     * side. Mirrors {@link DistanceEstimator#fromYoloDetections}'s
+     * "smallest distance wins" selection so we guard the same
+     * detection that would actually be returned.
+     */
+    private static final float TILE_EDGE_BAND_FRAC = 0.20f;
+
+    private boolean isInTileEdgeBand(java.util.List<com.overdrive.app.ai.Detection> dets,
+                                     int frameH) {
+        if (dets == null || dets.isEmpty()) return false;
+        // Use bbox aspect to back into a sensible frame width assumption.
+        // Foveated frames are square (640×640); mosaic quadrants are 4:3
+        // (320×240). Code path that sets isFoveated already gates on
+        // frameH ≥ CROP_SIZE so we know it's the square case here.
+        final int frameW = frameH;  // foveated path is always square
+
+        // Pick the closest valid detection (matches the selection rule
+        // inside DistanceEstimator.fromYoloDetections).
+        com.overdrive.app.ai.Detection closest = null;
+        float closestRatio = Float.MAX_VALUE;
+        for (com.overdrive.app.ai.Detection d : dets) {
+            if (d.getH() <= 0) continue;
+            // We only need ranking, not absolute distance — bbox-h ratio
+            // is monotonic with closeness given a fixed real height prior.
+            float invSize = 1.0f / (float) d.getH();
+            if (invSize < closestRatio) {
+                closestRatio = invSize;
+                closest = d;
+            }
+        }
+        if (closest == null) return false;
+        float centerX = closest.getX() + closest.getW() / 2.0f;
+        float frac = centerX / (float) frameW;
+        return frac < TILE_EDGE_BAND_FRAC || frac > (1.0f - TILE_EDGE_BAND_FRAC);
+    }
+
+    /**
+     * Compute the row of the lowest active motion block in a quadrant.
+     * "Lowest" = highest row index = closest to the bottom of the FOV
+     * which (after dewarp) corresponds to closest to the car. Returns -1
+     * if no block is confirmed.
+     */
+    private int lowestActiveBlockRow(MotionPipelineV2.QuadrantResult r) {
+        if (r == null || r.blockConfidence == null) return -1;
+        // blockConfidence is row-major: index = row * GRID_COLS + col
+        for (int row = MotionPipelineV2.GRID_ROWS - 1; row >= 0; row--) {
+            for (int col = 0; col < MotionPipelineV2.GRID_COLS; col++) {
+                int idx = row * MotionPipelineV2.GRID_COLS + col;
+                if (idx < r.blockConfidence.length && r.blockConfidence[idx] > 0f) {
+                    return row;
+                }
+            }
+        }
+        return -1;
+    }
+
+    // Cached per-tick trend per quadrant. The state-update half of
+    // proximityForQuadrant runs once per processFrameV2 tick (in the
+    // per-quadrant motion summary loop) and writes here; the read-only
+    // half consults this cache so subsequent log sites in the same tick
+    // (motion-start, motion-building, recording-trigger) report a
+    // consistent trend instead of clobbering each other's state.
+    //
+    // Indexed by quadrant. Cleared to UNKNOWN at engine shutdown.
+    private final DistanceEstimator.Trend[] cachedTrend = {
+            DistanceEstimator.Trend.UNKNOWN, DistanceEstimator.Trend.UNKNOWN,
+            DistanceEstimator.Trend.UNKNOWN, DistanceEstimator.Trend.UNKNOWN };
+
+    /**
+     * <b>State-mutating tick.</b> Updates {@code prevLowestBlockY[q]} and
+     * caches the per-quadrant trend for downstream read-only callers in
+     * the same tick. Call EXACTLY ONCE per quadrant per processFrameV2
+     * iteration (currently from the per-quadrant motion summary loop).
+     *
+     * <p>Audit H2: previously {@link #proximityForQuadrant} mutated
+     * prevLowestBlockY on every call. Multiple log sites in one tick
+     * (motion-summary → motion-start → motion-building → trigger) hit
+     * this path, the second call saw {@code dt=0} between sibling reads,
+     * and trendFromBlockY's elapsedMs guard returned UNKNOWN. The trend
+     * signal was silently lost on every multi-call frame. Splitting
+     * mutation from query fixes that.
+     */
+    private void updateProximityState(int quadrant, MotionPipelineV2.QuadrantResult result) {
+        if (quadrant < 0 || quadrant >= prevLowestBlockY.length) return;
+        int lowestNow = lowestActiveBlockRow(result);
+        long nowMs = System.currentTimeMillis();
+
+        DistanceEstimator.Trend trend = DistanceEstimator.Trend.UNKNOWN;
+        int prevRow = prevLowestBlockY[quadrant];
+        long prevMs = prevLowestBlockYAtMs[quadrant];
+        if (prevRow >= 0 && prevMs > 0 && lowestNow >= 0) {
+            trend = DistanceEstimator.trendFromBlockY(prevRow, lowestNow, nowMs - prevMs);
+        }
+
+        // Reset state on quiet quadrants so a 30s-old prevRow doesn't
+        // produce a bogus APPROACHING the next time blocks fire (audit M4).
+        if (lowestNow < 0) {
+            prevLowestBlockY[quadrant] = -1;
+            prevLowestBlockYAtMs[quadrant] = 0;
+        } else {
+            prevLowestBlockY[quadrant] = lowestNow;
+            prevLowestBlockYAtMs[quadrant] = nowMs;
+        }
+        cachedTrend[quadrant] = trend;
+    }
+
+    /**
+     * SOTA proximity estimate for a given quadrant. <b>Read-only.</b>
+     * Composes:
+     *   1. <b>Technique A</b> (preferred) — class-conditional bbox-height
+     *      inference from the latest YOLO detections in this quadrant.
+     *      Uses the coord-space frame height the AI ran against
+     *      (mosaic 240 vs foveated 640) so the focal/bbox ratio is
+     *      coherent. Picks the closest predicted detection (audit M2).
+     *   2. <b>Technique B</b> (fallback) — discrete tier from motion-block
+     *      density + lowest-active-row, plus trend from the per-tick
+     *      cache. No metric distance.
+     *
+     * <p>Idempotent within a tick — does not mutate state. Call
+     * {@link #updateProximityState} once per tick before any read sites
+     * fire to keep the trend signal current.
+     */
+    private DistanceEstimator.ProximityEstimate proximityForQuadrant(
+            int quadrant, MotionPipelineV2.QuadrantResult result) {
+        DistanceEstimator.Trend trend = (quadrant >= 0 && quadrant < cachedTrend.length)
+                ? cachedTrend[quadrant]
+                : DistanceEstimator.Trend.UNKNOWN;
+
+        // Technique A: try the latest YOLO detections for this quadrant.
+        // Single atomic read produces the (detections, frameHeight) pair
+        // atomically — no torn read between two sibling atomics. Either
+        // we see the previous tick's complete YoloPublication or we see
+        // the new tick's; never new detections paired with old frame H.
+        if (quadrant >= 0 && quadrant < lastYoloPublication.length()) {
+            YoloPublication pub = lastYoloPublication.get(quadrant);
+            if (pub != null && pub.detections != null && !pub.detections.isEmpty()) {
+                int frameH = pub.frameHeightPx > 0 ? pub.frameHeightPx : (THUMBNAIL_HEIGHT / 2);
+                // Per-quadrant base FOV from the active CameraProfile.
+                // Side-camera FOV is materially narrower than front/rear,
+                // and a single 110° constant was producing ~70%-high
+                // estimates on side cameras per validation analysis.
+                float baseFovDeg = (quadrant < cameraVerticalFovDeg.length)
+                        ? cameraVerticalFovDeg[quadrant]
+                        : DEFAULT_VERTICAL_FOV_DEG[0];
+
+                // Foveated crops sample a sub-window of one tile so
+                // their effective vertical FOV is narrower:
+                // baseFOV × (CROP_SIZE / stripHeight).
+                final float fovDeg;
+                final boolean isFoveated = frameH >= FOVEATED_CROP_SIZE_PX;
+                if (isFoveated) {
+                    int strip = cameraStripHeightPx > 0 ? cameraStripHeightPx : 960;
+                    float scale = (float) FOVEATED_CROP_SIZE_PX / (float) strip;
+                    if (scale > 1f) scale = 1f;  // foveated FOV can never exceed tile FOV
+                    fovDeg = baseFovDeg * scale;
+                } else {
+                    fovDeg = baseFovDeg;
+                }
+
+                // Tile-edge guard (validation report recommendation #2).
+                // The HAL fisheye dewarp is non-uniform: angular density
+                // per pixel varies across the tile. Bbox-height inference
+                // assumes locally affine projection, which holds near tile
+                // center but degrades at the edges (errors of 30-50% in
+                // the outer 20% of the tile). When the closest valid
+                // detection's bbox center is in that outer band, drop to
+                // tier-only — honest "near approaching" beats a wrong
+                // metric number. Only applies to foveated detections
+                // (the moving window can land at any tile-X); mosaic
+                // quadrants are bounded to one camera's tile and don't
+                // have this edge problem.
+                if (isFoveated && isInTileEdgeBand(pub.detections, frameH)) {
+                    // Fall through to Technique B below.
+                } else {
+                    DistanceEstimator.ProximityEstimate est =
+                            DistanceEstimator.fromYoloDetections(
+                                    pub.detections, frameH, fovDeg, trend);
+                    if (est != null) return est;
+                }
+            }
+        }
+
+        // Technique B: pre-YOLO tier + trend. Honest absence of meters.
+        // We re-scan the lowest active block here (cheap; just an O(70)
+        // pass over blockConfidence) rather than caching it, because
+        // tierFromMotion needs the *current* result not what
+        // updateProximityState saw — multiple log sites can be reading
+        // results at slightly different points within one tick.
+        int lowestNow = lowestActiveBlockRow(result);
+        DistanceEstimator.Tier tier = DistanceEstimator.tierFromMotion(
+                result != null ? result.activeBlocks : 0,
+                lowestNow,
+                MotionPipelineV2.GRID_ROWS);
+        return DistanceEstimator.ProximityEstimate.tierOnly(tier, trend);
     }
     
     /**
@@ -3699,12 +4195,14 @@ public class SurveillanceEngineGpu {
         // P1 #13: snapshot the slot once via getAndSet() so a late aiExecutor
         // lambda writing the same slot can't corrupt the value mid-read.
         if (lastEventQuadrant >= 0) {
-            java.util.List<com.overdrive.app.ai.Detection> snap =
-                    lastYoloDetections.getAndSet(lastEventQuadrant, null);
-            if (snap != null) {
-                int qW = THUMBNAIL_WIDTH / 2;
-                int qH = THUMBNAIL_HEIGHT / 2;
-                detectionBaseline.updateFromEventEnd(lastEventQuadrant, snap, qW, qH);
+            YoloPublication pub = lastYoloPublication.getAndSet(lastEventQuadrant, null);
+            if (pub != null && pub.detections != null) {
+                // updateFromEventEnd needs the bbox-coord-space dims that
+                // produced these detections — pull from the publication so
+                // a foveated event passes 640×640 instead of mosaic 320×240.
+                int qH = pub.frameHeightPx > 0 ? pub.frameHeightPx : (THUMBNAIL_HEIGHT / 2);
+                int qW = qH >= FOVEATED_CROP_SIZE_PX ? FOVEATED_CROP_SIZE_PX : (THUMBNAIL_WIDTH / 2);
+                detectionBaseline.updateFromEventEnd(lastEventQuadrant, pub.detections, qW, qH);
             }
             lastEventQuadrant = -1;
         }
@@ -4028,11 +4526,37 @@ public class SurveillanceEngineGpu {
         // Reset detection baseline for clean session
         detectionBaseline.reset();
         baselineSeeded = false;
+        // Clear ALL per-quadrant proximity-related state so a new session
+        // doesn't inherit a 30-second-old prevLowestBlockY (which combined
+        // with a fresh nowMs would compute a bogus APPROACHING/RECEDING
+        // trend on the very first tick). See audit re-pass session-residual.
         for (int q = 0; q < MotionPipelineV2.NUM_QUADRANTS; q++) {
-            lastYoloDetections.set(q, null);
+            lastYoloPublication.set(q, null);
+            cachedTrend[q] = DistanceEstimator.Trend.UNKNOWN;
+            prevLowestBlockY[q] = -1;
+            prevLowestBlockYAtMs[q] = 0;
         }
         lastEventQuadrant = -1;
-        
+
+        // Foveated mailbox cleanup. Without this, a request flag set by the
+        // FINAL frames of the previous surveillance session (a YOLO confirmer
+        // that asked for a foveated crop ~ms before disable) survives the
+        // ACC-OFF→ON→OFF window and fires on the next session's first tick —
+        // dispatching a crop with the prior session's centroid coordinates
+        // against this session's first frame. The per-poll 500ms staleness
+        // check bounds the impact (consumers reject the result), but the
+        // gl-thread service still runs the wasted readback. Cheap to clear.
+        synchronized (foveatedRequestLock) {
+            for (int q = 0; q < FOVEATED_NUM_QUADRANTS; q++) {
+                foveatedRequested[q] = false;
+                foveatedReqCentroidX[q] = 0f;
+                foveatedReqCentroidY[q] = 0f;
+                foveatedSlots[q].set(null);
+            }
+        }
+        foveatedRoundRobin = 0;
+        lastFoveatedServiceNs = 0L;
+
         // Apply per-quadrant ROI from persisted config
         if (config != null) {
             for (int q = 0; q < MotionPipelineV2.NUM_QUADRANTS; q++) {
@@ -4092,12 +4616,32 @@ public class SurveillanceEngineGpu {
 
         // P1 #15: cancel pending YOLO work and clear shared state BEFORE
         // resetting the baseline. Without this, an aiExecutor lambda already
-        // mid-flight can still write lastActors / lastYoloDetections after
+        // mid-flight can still write lastActors / lastYoloPublication after
         // disable returns, polluting the next session's first frames.
+        // Same set of arrays cleared as in enable() (audit re-pass
+        // session-residual): YoloPublication, cachedTrend, prevLowestBlockY,
+        // prevLowestBlockYAtMs.
         aiQuadrantQueueClear();
         for (int q = 0; q < MotionPipelineV2.NUM_QUADRANTS; q++) {
-            lastYoloDetections.set(q, null);
+            lastYoloPublication.set(q, null);
+            cachedTrend[q] = DistanceEstimator.Trend.UNKNOWN;
+            prevLowestBlockY[q] = -1;
+            prevLowestBlockYAtMs[q] = 0;
         }
+        // Foveated mailbox cleanup — symmetric with enable(). A request flag
+        // set in the last few frames before disable would otherwise persist
+        // through ACC-ON and fire stale on the next session's first service
+        // pass with the previous session's centroid coordinates.
+        synchronized (foveatedRequestLock) {
+            for (int q = 0; q < FOVEATED_NUM_QUADRANTS; q++) {
+                foveatedRequested[q] = false;
+                foveatedReqCentroidX[q] = 0f;
+                foveatedReqCentroidY[q] = 0f;
+                foveatedSlots[q].set(null);
+            }
+        }
+        foveatedRoundRobin = 0;
+        lastFoveatedServiceNs = 0L;
         // Brief drain so any inference already running observes active=false
         // and skips its writes. Bounded to 50ms — disable() is on the daemon
         // thread; we don't want to block the caller for a full inference.

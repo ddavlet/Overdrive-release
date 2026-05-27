@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "Bildet er satt  den tilpassede meldingen ignoreres. Rengjør bildet for å bruke en melding i stedet.",
     "screen_deterrent_image": "Tilpassede bilder eller GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, opptil 8 MB. Stanser hele skjermen.",
+    "themes_title": "Temaer av Giovanni Mirulla",
+    "download_set": "Last ned og bruk",
+    "downloading": "Laster ned...",
+    "applied": "Brukt!",
+    "failed": "Mislyktes",
+    "test_on_screen": "Test på skjerm",
     "screen_deterrent_upload": "Oppelasting",
     "screen_deterrent_replace": "Bygg ut bilde",
     "screen_deterrent_remove": "Fjern bildene",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "Blink",
     "cmd_find": "Finn",
     "cmd_live": "Live",
+    "cmd_recordings": "Opptak",
     "cmd_trunk_open": "Åpen bagagerum",
     "cmd_trunk_close": "Slått bagagerum",
     "cmd_trips": "Turer",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n} t siden",
     "toast_command_sent": "Kommando sendt",
     "toast_command_failed": "Kommando mislyktes",
-    "toast_no_location": "Kjøretøyposisjon ikke tilgjengelig",
-    "cmd_recordings": "Opptak"
+    "toast_no_location": "Kjøretøyposisjon ikke tilgjengelig"
   }
 }

@@ -2453,7 +2453,7 @@ BYD.surveillance = {
         var origText = btn.innerHTML;
         btn.disabled = true;
         btn.innerHTML = '<span data-i18n="surveillance.downloading">Downloading...</span>';
-        
+
         var self = this;
         fetch(url)
             .then(function(res) {

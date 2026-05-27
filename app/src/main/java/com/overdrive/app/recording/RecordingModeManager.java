@@ -77,10 +77,20 @@ public class RecordingModeManager {
         this.pipeline = pipeline;
         this.proximityController = new ProximityGuardController(context, pipeline);
         this.avcWarmup = new AvcHalWarmup();
-        
+
+        // Tell the pipeline to consult us before idle-shutdown tears it down.
+        // PROXIMITY_GUARD MONITORING needs the pipeline alive even when no
+        // recording is in flight — without this hook a 30s WebSocket idle
+        // would kill the camera between trigger windows.
+        pipeline.setKeepAlivePredicate(() -> {
+            if (!modeActive) return false;
+            Mode m = currentMode;
+            return m == Mode.CONTINUOUS || m == Mode.DRIVE_MODE || m == Mode.PROXIMITY_GUARD;
+        });
+
         // Load persisted mode from config
         loadPersistedMode();
-        
+
         logger.info("RecordingModeManager initialized: mode=" + currentMode);
         
         // Sync ACC state from AccMonitor if it's already been set by AccSentryDaemon
@@ -402,14 +412,26 @@ public class RecordingModeManager {
             // disabling it separately.
             
             // Start AVC keep-alive and activate mode after warmup.
-            // Skip the entire spawn when no recording mode is configured —
+            // Skip the AVC warmup spawn when no recording mode is configured —
             // otherwise the warmup `am start com.byd.avc/.MainActivity` runs
             // for nothing, and per existing notes the AVC poke perturbs the
-            // camera HAL / drags panoramic FPS down. Symmetric with the
-            // Mode.NONE early-return in activateModeWithWarmup().
+            // camera HAL / drags panoramic FPS down.
             final Mode modeToActivate = currentMode;
             if (modeToActivate == Mode.NONE) {
-                logger.debug("ACC ON with mode=NONE — no AVC warmup or mode activation");
+                // CRITICAL: don't bare-return here. Sentry/Surveillance can
+                // leave the pipeline running across ACC OFF→ON: pipeline.onAccOn()
+                // (called by CameraDaemon.onAccStateChanged before this method)
+                // disables surveillance mode and reopens the camera, but it
+                // does NOT stop the pipeline. Without an explicit teardown the
+                // camera + GL + encoder stay allocated indefinitely with no
+                // recording in flight, burning ~70% CPU until the user toggles
+                // a mode on then off again.
+                //
+                // activateMode(Mode.NONE) is the canonical "tear down" path —
+                // it calls pipeline.stop() + stopAvcKeepAlive() and clears
+                // modeActive. Idempotent if pipeline isn't running.
+                logger.info("ACC ON with mode=NONE — ensuring pipeline is stopped");
+                activateMode(Mode.NONE);
                 return;
             }
             new Thread(() -> {

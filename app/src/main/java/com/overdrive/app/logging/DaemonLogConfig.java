@@ -85,8 +85,10 @@ public final class DaemonLogConfig {
     /** AdaptiveBitrate - bitrate controller */
     public static final boolean ADAPTIVE_BITRATE = false;
     
-    /** H264CircularBuffer - pre-record circular buffer */
+    /** H264CircularBuffer - legacy pre-record slot pool (replaced by byte ring). */
     public static final boolean H264_CIRCULAR_BUFFER = false;
+    /** H264ByteRing - SOTA pre-record byte-ring buffer */
+    public static final boolean H264_BYTE_RING = false;
     
     /** GpuPipelineFactory - pipeline factory */
     public static final boolean GPU_PIPELINE_FACTORY = false;
@@ -252,6 +254,7 @@ public final class DaemonLogConfig {
             if (HW_ENCODER)                 ENABLED_TAGS.add("HWEncoderGpu");
             if (ADAPTIVE_BITRATE)           ENABLED_TAGS.add("AdaptiveBitrate");
             if (H264_CIRCULAR_BUFFER)       ENABLED_TAGS.add("H264CircularBuffer");
+            if (H264_BYTE_RING)             ENABLED_TAGS.add("H264ByteRing");
             if (GPU_PIPELINE_FACTORY)       ENABLED_TAGS.add("GpuPipelineFactory");
             if (SURVEILLANCE_ENGINE)        ENABLED_TAGS.add("SurveillanceEngineGpu");
             if (EVENT_TIMELINE)             ENABLED_TAGS.add("EventTimeline");

@@ -9,9 +9,12 @@ import android.graphics.Movie;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.graphics.Point;
 import android.os.PowerManager;
 import android.os.SystemClock;
+import android.view.Display;
 import android.view.Surface;
+import android.view.WindowManager;
 
 import com.overdrive.app.config.UnifiedConfigManager;
 import com.overdrive.app.daemon.DaemonBootstrap;
@@ -76,8 +79,17 @@ public final class ScreenDeterrent {
     private static final int DEFAULT_DURATION_SEC = 8;
     private static final int GIF_FRAME_INTERVAL_MS = 50;
     private static final int STATIC_FRAME_TICK_MS = 200;
-    private static final int DISPLAY_W = 1920;
-    private static final int DISPLAY_H = 1080;
+    /**
+     * Fallback display dimensions if the WindowManager / Display lookup fails.
+     * Matches the BYD Seal landscape baseline; portrait Seal (1080×1920) and
+     * other supported models (Tang, Atto3, etc.) override these at fire()
+     * time via resolveDisplaySize(). Typography in drawDefaultText() is
+     * authored against this reference height — a `dh / FALLBACK_DISPLAY_H`
+     * scale factor adapts every text size + icon dimension to the real panel
+     * without per-model branching.
+     */
+    private static final int FALLBACK_DISPLAY_W = 1920;
+    private static final int FALLBACK_DISPLAY_H = 1080;
 
     private static final long HOT_CACHE_TTL_MS = 1_000;
     private static final long GATE_REFRESH_INTERVAL_MS = 1_000;
@@ -303,6 +315,14 @@ public final class ScreenDeterrent {
         launchActivity();  // touch-capture in app process
         activityLaunched = true;
 
+        // Resolve the real panel size once per fire() so portrait-rotated
+        // Seal (1080×1920) and other models (Tang, Atto3, etc.) get a buffer
+        // matched to the panel instead of a stretched/clipped 1920×1080
+        // landscape canvas.
+        Point size = resolveDisplaySize(ctx);
+        final int dispW = size.x;
+        final int dispH = size.y;
+
         Object surface = null;
         Bitmap staticFrame = null;
         Movie movie = null;
@@ -311,7 +331,7 @@ public final class ScreenDeterrent {
             boolean isGif = imagePath != null && !imagePath.isEmpty()
                     && isGifFile(imagePath);
 
-            surface = createBufferLayer("ScreenDeterrent", DISPLAY_W, DISPLAY_H);
+            surface = createBufferLayer("ScreenDeterrent", dispW, dispH);
             if (surface == null) {
                 logger.warn("Failed to create SurfaceControl buffer layer");
                 return;
@@ -321,9 +341,9 @@ public final class ScreenDeterrent {
             if (isGif) movie = decodeGifSafe(imagePath);
 
             if (movie != null && movie.duration() > 0) {
-                renderGifLoop(surface, movie);
+                renderGifLoop(surface, movie, dispW, dispH);
             } else {
-                staticFrame = buildStaticFrame(imagePath);
+                staticFrame = buildStaticFrame(imagePath, dispW, dispH);
                 renderStaticLoop(surface, staticFrame);
             }
         } catch (Throwable t) {
@@ -350,18 +370,18 @@ public final class ScreenDeterrent {
         }
     }
 
-    private void renderGifLoop(Object surface, Movie movie) {
+    private void renderGifLoop(Object surface, Movie movie, int dispW, int dispH) {
         Bitmap frame = null;
         try {
-            frame = Bitmap.createBitmap(DISPLAY_W, DISPLAY_H, Bitmap.Config.ARGB_8888);
+            frame = Bitmap.createBitmap(dispW, dispH, Bitmap.Config.ARGB_8888);
             Canvas frameCanvas = new Canvas(frame);
 
-            float scale = Math.min((float) DISPLAY_W / movie.width(),
-                                   (float) DISPLAY_H / movie.height());
+            float scale = Math.min((float) dispW / movie.width(),
+                                   (float) dispH / movie.height());
             int dw = (int) (movie.width() * scale);
             int dh = (int) (movie.height() * scale);
-            int dx = (DISPLAY_W - dw) / 2;
-            int dy = (DISPLAY_H - dh) / 2;
+            int dx = (dispW - dw) / 2;
+            int dy = (dispH - dh) / 2;
 
             long start = SystemClock.uptimeMillis();
             while (!shouldStop()) {
@@ -451,29 +471,29 @@ public final class ScreenDeterrent {
 
     /** Decode static image with inSampleSize keyed to display so even a
      *  50 MP user upload doesn't allocate >100 MB. */
-    private Bitmap buildStaticFrame(String imagePath) {
+    private Bitmap buildStaticFrame(String imagePath, int dispW, int dispH) {
         Bitmap bg = null;
         if (imagePath != null && !imagePath.isEmpty()) {
-            bg = decodeBitmapDownsampled(imagePath);
+            bg = decodeBitmapDownsampled(imagePath, dispW, dispH);
         }
 
-        Bitmap canvas = Bitmap.createBitmap(DISPLAY_W, DISPLAY_H, Bitmap.Config.ARGB_8888);
+        Bitmap canvas = Bitmap.createBitmap(dispW, dispH, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(canvas);
 
         if (bg != null) {
             c.drawColor(Color.BLACK);
-            float scale = Math.min((float) DISPLAY_W / bg.getWidth(),
-                                   (float) DISPLAY_H / bg.getHeight());
+            float scale = Math.min((float) dispW / bg.getWidth(),
+                                   (float) dispH / bg.getHeight());
             int dw = (int) (bg.getWidth() * scale);
             int dh = (int) (bg.getHeight() * scale);
-            int dx = (DISPLAY_W - dw) / 2;
-            int dy = (DISPLAY_H - dh) / 2;
+            int dx = (dispW - dw) / 2;
+            int dy = (dispH - dh) / 2;
             Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
             c.drawBitmap(bg, null, new Rect(dx, dy, dx + dw, dy + dh), p);
             bg.recycle();
         } else {
             c.drawColor(0xFFB00020);
-            drawDefaultText(c);
+            drawDefaultText(c, dispW, dispH);
         }
         return canvas;
     }
@@ -511,7 +531,7 @@ public final class ScreenDeterrent {
         }
     }
 
-    private static Bitmap decodeBitmapDownsampled(String path) {
+    private static Bitmap decodeBitmapDownsampled(String path, int dispW, int dispH) {
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
@@ -519,8 +539,8 @@ public final class ScreenDeterrent {
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
 
             int sample = 1;
-            while ((bounds.outWidth / sample) > DISPLAY_W * 2
-                    || (bounds.outHeight / sample) > DISPLAY_H * 2) {
+            while ((bounds.outWidth / sample) > dispW * 2
+                    || (bounds.outHeight / sample) > dispH * 2) {
                 sample *= 2;
             }
             BitmapFactory.Options decode = new BitmapFactory.Options();
@@ -550,7 +570,7 @@ public final class ScreenDeterrent {
      * All text + icon use #E5E7EB (light grey) on the red background — pure
      * white was too harsh; this reads cleaner per user feedback.
      */
-    private void drawDefaultText(Canvas c) {
+    private void drawDefaultText(Canvas c, int dispW, int dispH) {
         // Pure white for foreground text — sits on a saturated red background,
         // so the slight harshness vs the previous E5E7EB grey is the right
         // call for legibility from across the cabin. The brand glyph keeps
@@ -558,19 +578,26 @@ public final class ScreenDeterrent {
         // (below) so it reads cleanly without clashing with the red fill.
         final int FG = 0xFFFFFFFF;
 
+        // Layout was authored against the 1920×1080 BYD Seal landscape
+        // baseline. Scale every absolute pixel value by the shorter axis
+        // (min of width-ratio and height-ratio) so portrait Seal (1080×1920)
+        // and other panels keep the same visual proportions instead of
+        // overflowing the headline off-canvas or producing a tiny logo on a
+        // wider screen.
+        float minRatio = Math.min((float) dispW / FALLBACK_DISPLAY_W,
+                                  (float) dispH / FALLBACK_DISPLAY_H);
+
         // 1. OverDrive glyph, centered upper-third. Painted INSIDE a white
         //    rounded-rectangle "card" so the green glyph has its own surface
         //    against the red deterrent background. The card uses iOS-style
         //    squircle radius (~22%) to match the OverDrive launcher icon.
-        //    Glyph size is bumped up vs. the previous bare-floating layout
-        //    since the white card now anchors it visually.
         //
         //    Falls back to a hand-drawn camera icon if the APK asset can't
         //    be loaded (asset path renamed, context lost, OOM on decode)
         //    so the deterrent always paints something instead of going blank.
-        float iconCx = DISPLAY_W / 2f;
-        float iconCy = DISPLAY_H * 0.26f;
-        float cardSize = 280f;
+        float iconCx = dispW / 2f;
+        float iconCy = dispH * 0.26f;
+        float cardSize = 280f * minRatio;
         Bitmap logo = loadBrandLogo();
         if (logo != null) {
             float cardHalf = cardSize / 2f;
@@ -585,10 +612,7 @@ public final class ScreenDeterrent {
             cardPaint.setStyle(Paint.Style.FILL);
             c.drawRoundRect(cardRect, corner, corner, cardPaint);
 
-            // Glyph centered inside, with breathing room — the asset is
-            // already padded with whitespace, so we only need a small inset
-            // here. Fits the brand glyph at ~88% of card width which makes
-            // it noticeably larger than the previous 220px floating size.
+            // Glyph centered inside, with breathing room.
             float glyphSize = cardSize * 0.88f;
             float glyphHalf = glyphSize / 2f;
             Rect glyphDst = new Rect(
@@ -597,7 +621,7 @@ public final class ScreenDeterrent {
             Paint imgPaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
             c.drawBitmap(logo, null, glyphDst, imgPaint);
         } else {
-            drawCameraIcon(c, iconCx, iconCy, 200, FG);
+            drawCameraIcon(c, iconCx, iconCy, 200f * minRatio, FG);
         }
 
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -605,26 +629,28 @@ public final class ScreenDeterrent {
         p.setTextAlign(Paint.Align.CENTER);
 
         // 2. OVERDRIVE wordmark — white, sits below the card.
-        p.setTextSize(56);
+        p.setTextSize(56f * minRatio);
         p.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD));
         p.setLetterSpacing(0.20f);
-        c.drawText("OVERDRIVE", DISPLAY_W / 2f, DISPLAY_H * 0.50f, p);
+        c.drawText("OVERDRIVE", dispW / 2f, dispH * 0.50f, p);
 
-        // 3. Headline — BIG, BOLD. 144pt is ~2× the wordmark, scales with
-        //    1080p panel. Letter-spacing 0.04 keeps it readable at this size.
-        p.setTextSize(144);
+        // 3. Headline — BIG, BOLD. Authored at 144pt against 1080p; scaled
+        //    proportionally to the panel's shorter axis so portrait or
+        //    smaller panels don't blow the text off the canvas.
+        //    Letter-spacing 0.04 keeps it readable at this size.
+        p.setTextSize(144f * minRatio);
         p.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD));
         p.setLetterSpacing(0.04f);
         String headline = readMessage("YOU ARE ON CAMERA");
-        c.drawText(headline, DISPLAY_W / 2f, DISPLAY_H * 0.70f, p);
+        c.drawText(headline, dispW / 2f, dispH * 0.70f, p);
 
         // 4. Subtitle.
-        p.setTextSize(64);
+        p.setTextSize(64f * minRatio);
         p.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL));
         p.setLetterSpacing(0.04f);
         p.setAlpha(220);
         c.drawText("Surveillance recording in progress",
-            DISPLAY_W / 2f, DISPLAY_H * 0.82f, p);
+            dispW / 2f, dispH * 0.82f, p);
     }
 
     /**
@@ -634,6 +660,7 @@ public final class ScreenDeterrent {
      * cleanly against any background.
      */
     private static void drawCameraIcon(Canvas c, float cx, float cy, float size, int color) {
+        if (size <= 0) return;
         Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
         stroke.setColor(color);
         stroke.setStyle(Paint.Style.STROKE);
@@ -674,6 +701,40 @@ public final class ScreenDeterrent {
             if (data != null) return Movie.decodeByteArray(data, 0, data.length);
         } catch (Throwable ignored) {}
         return null;
+    }
+
+    // ── Display size resolution ────────────────────────────────────────────
+
+    /**
+     * Real-pixel size of the head unit's primary display. Uses
+     * Display.getRealSize() so we get the full panel resolution including
+     * any system bars (the SurfaceControl layer paints over everything
+     * regardless). Falls back to the BYD Seal landscape baseline when the
+     * lookup fails — better to render a slightly off-size buffer than
+     * nothing at all.
+     *
+     * Why per-fire instead of cached: the BYD Seal panel rotates between
+     * 1920×1080 and 1080×1920 at runtime (per the target-display memory),
+     * and a cached value would lock the deterrent to whatever orientation
+     * was active at process start.
+     */
+    private static Point resolveDisplaySize(Context ctx) {
+        Point out = new Point(FALLBACK_DISPLAY_W, FALLBACK_DISPLAY_H);
+        try {
+            WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
+            if (wm == null) return out;
+            Display d = wm.getDefaultDisplay();
+            if (d == null) return out;
+            Point real = new Point();
+            d.getRealSize(real);
+            if (real.x > 0 && real.y > 0) {
+                out.x = real.x;
+                out.y = real.y;
+            }
+        } catch (Throwable t) {
+            logger.debug("resolveDisplaySize failed: " + t.getMessage());
+        }
+        return out;
     }
 
     // ── Wake / sleep panel (BYD PowerManager extension, UID 2000 only) ─────

@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "รูปที่ตั้ง  ข้อความที่กําหนดเองถูกมองข้าม คลีย์ภาพเพื่อใช้ข้อความแทน",
     "screen_deterrent_image": "รูปแบบที่ต้องการ หรือ GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF ขนาดสูงสุด 8 MB แทนหน้าจอทั้งตัว",
+    "themes_title": "หัวข้อโดย จอฟานิ มิรูล่า",
+    "download_set": "ดาวน์โหลด & Set",
+    "downloading": "ดาวน์โหลด",
+    "applied": "ใช้แล้ว!",
+    "failed": "ล้มเหลว",
+    "test_on_screen": "เรื่อง การทดสอบ",
     "screen_deterrent_upload": "โหลดขึ้น",
     "screen_deterrent_replace": "แทนภาพ",
     "screen_deterrent_remove": "รูปภาพ Remove",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "กระพริบไฟ",
     "cmd_find": "ค้นหารถ",
     "cmd_live": "ภาพสด",
+    "cmd_recordings": "การบันทึก",
     "cmd_trunk_open": "เปิดกระเป๋าเดินทาง",
     "cmd_trunk_close": "กระเป๋าเดินทางปิด",
     "cmd_trips": "การเดินทาง",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n} ชม.ที่แล้ว",
     "toast_command_sent": "ส่งคำสั่งแล้ว",
     "toast_command_failed": "ส่งคำสั่งไม่สำเร็จ",
-    "toast_no_location": "ไม่มีข้อมูลตำแหน่งรถ",
-    "cmd_recordings": "การบันทึก"
+    "toast_no_location": "ไม่มีข้อมูลตำแหน่งรถ"
   }
 }

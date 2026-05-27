@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "Образец настроен  пользовательское сообщение игнорируется. Удалить изображение, чтобы использовать сообщение вместо этого.",
     "screen_deterrent_image": "Настроенное изображение или GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, до 8 МБ. Заменяет весь экран.",
+    "themes_title": "Темы: Джованни Мирулла",
+    "download_set": "Скачать и настроить",
+    "downloading": "Скачать",
+    "applied": "Применяется!",
+    "failed": "Не удалось",
+    "test_on_screen": "Тест на экране",
     "screen_deterrent_upload": "Нагрузка вверх",
     "screen_deterrent_replace": "Заменить изображение",
     "screen_deterrent_remove": "Изображение изображения",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "Мигнуть",
     "cmd_find": "Найти",
     "cmd_live": "Прямой эфир",
+    "cmd_recordings": "Записи",
     "cmd_trunk_open": "Открытый багажник",
     "cmd_trunk_close": "Закрытый багажник",
     "cmd_trips": "Поездки",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n} ч назад",
     "toast_command_sent": "Команда отправлена",
     "toast_command_failed": "Команда не выполнена",
-    "toast_no_location": "Местоположение автомобиля недоступно",
-    "cmd_recordings": "Записи"
+    "toast_no_location": "Местоположение автомобиля недоступно"
   }
 }

@@ -1383,11 +1383,30 @@ public class PanoramicCameraGpu {
             // to the share-group sibling. Without it, the AI thread may
             // sample stale bytes despite holding a "fresh" texture id —
             // share-group visibility for textures is per-EGL-flush.
+            //
+            // <b>Gate on sentry.isActive().</b> The AI lane has exactly two
+            // consumers — V2 motion mosaic readback and the foveated crop
+            // mailbox — and both are surveillance-only. When sentry is off
+            // (every ACC-ON recording mode: CONTINUOUS / DRIVE_MODE /
+            // PROXIMITY_GUARD) nobody reads the AI lane's output, so
+            // publishing frames to it just burns CPU: glFlush is a kernel
+            // ioctl into msm_kgsl, the AtomicInteger lazySet plus
+            // postQueued CAS bounce a cache line cross-core, the
+            // Handler.post wakes the AI-lane thread for a no-op
+            // processOnce that immediately exits via the sentry.isActive()
+            // checks inside it. Pre-v19 the entire AI block here was
+            // gated on sentry.isActive(); the v19 refactor that moved AI
+            // work to the dedicated GL thread inadvertently dropped this
+            // gate, costing ~30-40% extra encoder-thread CPU during
+            // ACC-ON CONTINUOUS recording. Restoring the gate here puts
+            // ACC-ON load back at v17/v18 levels.
             long stageBeforeAiReadbackNs = System.nanoTime();
             long stageAfterAiReadbackNs = stageBeforeAiReadbackNs;
             long stageAfterAiSubmitNs = stageBeforeAiReadbackNs;
             AiLaneGl localAiLane = aiLaneGl;
-            if (localAiLane != null && localAiLane.isRunning()) {
+            SurveillanceEngineGpu localSentry = sentry;
+            boolean aiLaneNeeded = localSentry != null && localSentry.isActive();
+            if (localAiLane != null && localAiLane.isRunning() && aiLaneNeeded) {
                 android.opengl.GLES20.glFlush();
                 localAiLane.notifyFrame(cameraFrameSeq.get());
             }

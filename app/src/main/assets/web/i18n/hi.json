@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "छवि सेट है  कस्टम संदेश को अनदेखा किया जा रहा है. इसके बजाय संदेश का उपयोग करने के लिए छवि को साफ़ करें.",
     "screen_deterrent_image": "कस्टम छवि या GIF",
     "screen_deterrent_image_desc": "पीएनजी / जेपीजी / वेबपी / जीआईएफ, 8 एमबी तक। पूरी स्क्रीन को प्रतिस्थापित करता है।",
+    "themes_title": "Giovanni Mirulla द्वारा थीम",
+    "download_set": "डाउनलोड करें और लगाएँ",
+    "downloading": "डाउनलोड हो रहा है...",
+    "applied": "लागू किया गया!",
+    "failed": "विफल",
+    "test_on_screen": "स्क्रीन पर परीक्षण",
     "screen_deterrent_upload": "ऊपर लोड",
     "screen_deterrent_replace": "छवि को प्रतिस्थापित करें",
     "screen_deterrent_remove": "छवि हटाएँ",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "फ्लैश",
     "cmd_find": "ढूंढें",
     "cmd_live": "लाइव",
+    "cmd_recordings": "रिकॉर्डिंग",
     "cmd_trunk_open": "खुला ट्रंक",
     "cmd_trunk_close": "बंद ट्रंक",
     "cmd_trips": "यात्राएँ",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n} घंटे पहले",
     "toast_command_sent": "कमांड भेजी गई",
     "toast_command_failed": "कमांड विफल",
-    "toast_no_location": "वाहन स्थान उपलब्ध नहीं",
-    "cmd_recordings": "रिकॉर्डिंग"
+    "toast_no_location": "वाहन स्थान उपलब्ध नहीं"
   }
 }

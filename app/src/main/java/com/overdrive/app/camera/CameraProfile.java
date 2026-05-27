@@ -25,6 +25,19 @@ public final class CameraProfile {
     private final int directPreviewWidth;
     private final int directPreviewHeight;
     private final EnumMap<CameraRole, CameraSourceRef> defaultRoleMappings;
+    // Per-quadrant effective vertical FOV in degrees AFTER the BYD HAL's
+    // dewarp. BYD AVM systems use different fisheye sensors per camera:
+    // front/rear are ultra-wide (mounted in the grille and rear plate
+    // looking down/around the car) while the side mirrors carry tighter
+    // fisheyes to fit the mirror housing. The validation analysis showed
+    // that hardcoding a single 110° constant inflated side-camera
+    // distance estimates by ~70%; per-quadrant values close that gap.
+    //
+    // Quadrant order on the mosaic: Q0=front, Q1=right, Q2=rear, Q3=left.
+    // These are estimates derived from typical AVM hardware datasheets;
+    // an on-device calibration could tighten them but the per-quadrant
+    // split alone is a substantial improvement over the global constant.
+    private final float[] verticalFovDegPerQuadrant;
 
     public CameraProfile(
             String id,
@@ -35,7 +48,8 @@ public final class CameraProfile {
             int panoSurfaceMode,
             int directPreviewWidth,
             int directPreviewHeight,
-            Map<CameraRole, CameraSourceRef> defaultRoleMappings) {
+            Map<CameraRole, CameraSourceRef> defaultRoleMappings,
+            float[] verticalFovDegPerQuadrant) {
         this.id = id;
         this.displayName = displayName;
         this.panoCameraId = panoCameraId;
@@ -48,6 +62,41 @@ public final class CameraProfile {
         if (defaultRoleMappings != null) {
             this.defaultRoleMappings.putAll(defaultRoleMappings);
         }
+        // Default to a uniform 110° if no per-quadrant data was supplied
+        // (preserves prior behaviour for any caller still using the legacy
+        // 9-arg constructor via the convenience overload below).
+        if (verticalFovDegPerQuadrant != null && verticalFovDegPerQuadrant.length == 4) {
+            this.verticalFovDegPerQuadrant = verticalFovDegPerQuadrant.clone();
+        } else {
+            this.verticalFovDegPerQuadrant = new float[]{110f, 110f, 110f, 110f};
+        }
+    }
+
+    /** Convenience constructor — defaults to uniform 110° vertical FOV. */
+    public CameraProfile(
+            String id,
+            String displayName,
+            int panoCameraId,
+            int panoWidth,
+            int panoHeight,
+            int panoSurfaceMode,
+            int directPreviewWidth,
+            int directPreviewHeight,
+            Map<CameraRole, CameraSourceRef> defaultRoleMappings) {
+        this(id, displayName, panoCameraId, panoWidth, panoHeight,
+                panoSurfaceMode, directPreviewWidth, directPreviewHeight,
+                defaultRoleMappings, null);
+    }
+
+    /**
+     * Vertical FOV in degrees for a given quadrant (0=front, 1=right,
+     * 2=rear, 3=left). Out-of-range quadrant returns the front FOV.
+     */
+    public float getVerticalFovDeg(int quadrant) {
+        if (quadrant < 0 || quadrant >= verticalFovDegPerQuadrant.length) {
+            return verticalFovDegPerQuadrant[0];
+        }
+        return verticalFovDegPerQuadrant[quadrant];
     }
 
     public String getId() {

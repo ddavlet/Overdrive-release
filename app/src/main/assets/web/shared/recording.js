@@ -950,6 +950,7 @@ BYD.recording = {
             // tab no longer overwrite Storage/Proximity-Guard prefs the user
             // may have changed on another device while this tab was open.
             let storageData = {};
+            let qualityRejectedFields = [];
             const prevFps = this.savedConfig ? this.savedConfig.cameraFps : 15;
 
             if (activeTab === 'quality') {
@@ -971,6 +972,15 @@ BYD.recording = {
                     })
                 });
                 if (!qResp.ok) throw new Error('quality ' + qResp.status);
+                // Surface field-level rejections in the final toast (instead
+                // of firing a separate warn toast that collides with the
+                // success toast at the end of saveSettings).
+                try {
+                    const qData = await qResp.clone().json();
+                    if (qData && qData.rejected && qData.rejected.length) {
+                        qualityRejectedFields = qData.rejected.map(function (r) { return r.field; });
+                    }
+                } catch (e) { /* response body parse — non-fatal */ }
                 // Mirror codec + tier into the unified store so other pages
                 // that read from there see the new values. Note: legacy
                 // `bitrate` key is no longer written; the single `quality`
@@ -1045,18 +1055,37 @@ BYD.recording = {
             // Refresh storage stats after save (cleanup may have run)
             setTimeout(() => this.loadStorageStats(), 1000);
 
-            let msg = BYD.i18n.t('recording.settings_applied');
-            if (activeTab === 'quality' && this.config.recordingCodec === 'H265') {
-                msg += ' - ' + BYD.i18n.t('recording.h265_next_recording');
-            }
-            if (activeTab === 'quality' && this.config.cameraFps !== prevFps) {
-                msg += ' - ' + BYD.i18n.t('recording.fps_next_acc_on');
-            }
-            if (storageData.cleanup && storageData.cleanup.recordingsToDelete) {
-                msg = BYD.i18n.t('recording.settings_applied_deleting', {files: storageData.cleanup.recordingsFilesEstimate, size: storageData.cleanup.recordingsToDelete});
+            // Toast policy: a single toast at the end of save. Severity is
+            // derived from the most-pessimistic outcome — if the server kept
+            // ANY field at its prior value (rejected[]), we show 'warn'. If
+            // ALL submitted recording knobs were rejected we don't claim
+            // "applied". Otherwise success path is unchanged.
+            let msg;
+            let severity = 'success';
+            if (activeTab === 'quality' && qualityRejectedFields.length) {
+                const fields = qualityRejectedFields.join(', ');
+                const submittedQualityFieldCount = 3; // recordingQuality, recordingCodec, cameraFps
+                if (qualityRejectedFields.length >= submittedQualityFieldCount) {
+                    msg = 'No changes applied — values rejected: ' + fields;
+                    severity = 'error';
+                } else {
+                    msg = BYD.i18n.t('recording.settings_applied') + ' — but kept old values for: ' + fields;
+                    severity = 'warn';
+                }
+            } else {
+                msg = BYD.i18n.t('recording.settings_applied');
+                if (activeTab === 'quality' && this.config.recordingCodec === 'H265') {
+                    msg += ' - ' + BYD.i18n.t('recording.h265_next_recording');
+                }
+                if (activeTab === 'quality' && this.config.cameraFps !== prevFps) {
+                    msg += ' - ' + BYD.i18n.t('recording.fps_next_acc_on');
+                }
+                if (storageData.cleanup && storageData.cleanup.recordingsToDelete) {
+                    msg = BYD.i18n.t('recording.settings_applied_deleting', {files: storageData.cleanup.recordingsFilesEstimate, size: storageData.cleanup.recordingsToDelete});
+                }
             }
 
-            if (BYD.utils && BYD.utils.toast) BYD.utils.toast(msg, 'success');
+            if (BYD.utils && BYD.utils.toast) BYD.utils.toast(msg, severity);
         } catch (e) {
             console.error('recording.saveSettings error:', e);
             if (BYD.utils && BYD.utils.toast) BYD.utils.toast(BYD.i18n.t('recording.save_settings_failed'), 'error');

@@ -23,6 +23,22 @@ public final class CameraProfiles {
 
     private static final LinkedHashMap<String, CameraProfile> PROFILES = new LinkedHashMap<>();
 
+    // Per-quadrant vertical FOV in degrees AFTER HAL dewarp.
+    // Quadrant order: 0=front, 1=right, 2=rear, 3=left.
+    //
+    // Front and rear cameras are typically ultra-wide fisheyes mounted in
+    // the BYD logo / rear plate looking down to capture the area
+    // immediately around the bumpers (~115° vertical effective extent
+    // after dewarp). Side cameras live in the mirror housings with
+    // tighter optics to fit the housing geometry (~95° vertical).
+    //
+    // Numbers are derived from typical AVM hardware datasheets; the
+    // distance-estimation math is robust to ±20% FOV error so these are
+    // meaningfully better than a single global constant even without
+    // per-vehicle calibration. See validation report in feedback memory
+    // for the geometric analysis.
+    private static final float[] FOV_DEG_DEFAULT = { 115f, 95f, 115f, 95f };
+
     static {
         EnumMap<CameraRole, CameraSourceRef> legacyMappings = new EnumMap<>(CameraRole.class);
         legacyMappings.put(CameraRole.PANO_FRONT, CameraSourceRef.panoramicSlice(PanoramicSlice.SLICE_4));
@@ -39,7 +55,8 @@ public final class CameraProfiles {
                 0,
                 1280,
                 960,
-                legacyMappings));
+                legacyMappings,
+                FOV_DEG_DEFAULT));
 
         EnumMap<CameraRole, CameraSourceRef> tangMappings = new EnumMap<>(legacyMappings);
         tangMappings.put(CameraRole.WINDSHIELD, CameraSourceRef.direct(0));
@@ -52,7 +69,8 @@ public final class CameraProfiles {
                 0,
                 1280,
                 720,
-                tangMappings));
+                tangMappings,
+                FOV_DEG_DEFAULT));
     }
 
     private CameraProfiles() {

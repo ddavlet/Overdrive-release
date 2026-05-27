@@ -24,11 +24,15 @@ public class GpuSurveillancePipeline {
     private static final DaemonLogger logger = DaemonLogger.getInstance(TAG);
     
     // Components
-    private PanoramicCameraGpu camera;
-    private GpuMosaicRecorder recorder;  // Single recorder for both modes
+    // volatile: read from worker threads (IdleShutdown, yield listener,
+    // applyBatchedChange holds reconfigLock — different monitor than stop()'s
+    // `this`) where the writer's monitor isn't held; volatile makes the
+    // null-after-stop and swap-on-reinit visible without tearing.
+    private volatile PanoramicCameraGpu camera;
+    private volatile GpuMosaicRecorder recorder;  // Single recorder for both modes
     private GpuDownscaler downscaler;
     private SurveillanceEngineGpu sentry;
-    private HardwareEventRecorderGpu encoder;  // Single encoder for recording/surveillance
+    private volatile HardwareEventRecorderGpu encoder;  // Single encoder for recording/surveillance
     private AdaptiveBitrateController bitrateController;
     
     // Streaming components (separate encoder - always available)
@@ -47,7 +51,16 @@ public class GpuSurveillancePipeline {
         NORMAL_RECORDING,   // User manually recording
         SURVEILLANCE    // Auto-recording on motion
     }
-    private Mode currentMode = Mode.IDLE;
+    // volatile: read from worker threads (IdleShutdown, IPC, GL yield) without
+    // taking the monitor in stop()/start().
+    private volatile Mode currentMode = Mode.IDLE;
+
+    // External "keep pipeline alive" predicate, e.g. PROXIMITY_GUARD MONITORING
+    // where currentMode is IDLE and recorder isn't recording yet, but the
+    // ADAS listener is armed and will soon trigger startRecording(). Without
+    // this hook the idle-shutdown timer would tear the pipeline down between
+    // monitoring and the next radar trigger.
+    private volatile java.util.concurrent.Callable<Boolean> keepAlivePredicate;
     
     // Configuration
     private final int cameraWidth;
@@ -59,7 +72,8 @@ public class GpuSurveillancePipeline {
     
     // State
     private boolean initialized = false;
-    private boolean running = false;
+    // volatile: idle-shutdown thread reads without taking the monitor.
+    private volatile boolean running = false;
     // True while {@link #stop()} is mid-teardown (encoders releasing, EGL
     // tearing down). Concurrent start() must wait until stop completes —
     // otherwise we race the encoder release with init() allocating a new
@@ -179,42 +193,54 @@ public class GpuSurveillancePipeline {
     private void applyBitrateChangeLocked(int bitrate) {
         // Update config first
         config.setCustomBitrate(bitrate);
-        
+
         if (encoder == null) {
             logger.info("Bitrate setting saved (encoder not initialized yet): " + (bitrate / 1_000_000) + " Mbps");
             return;
         }
-        
+
         // Check if bitrate actually changed
         if (encoder.getBitrate() == bitrate) {
             logger.info("Bitrate already set to: " + (bitrate / 1_000_000) + " Mbps");
             return;
         }
-        
-        logger.info("Bitrate change requested: " + (bitrate / 1_000_000) + " Mbps - reinitializing encoder");
-        
-        boolean wasSurveillance = currentMode == Mode.SURVEILLANCE;
-        boolean wasNormalRecording = currentMode == Mode.NORMAL_RECORDING;
-        boolean wasRecording = isRecording();
-        
+
+        // Bitrate-only change: inline reconfigure via MediaCodec.setParameters.
+        // No encoder release, no recording restart, no pre-record loss. The
+        // byte-ring pre-record buffer is bitrate-agnostic; the encoder's
+        // PARAMETER_KEY_VIDEO_BITRATE is the only state that needs updating.
+        // (Full reinit is reserved for codec changes — see applyCodecChange.)
+        logger.info("Bitrate change: " + (bitrate / 1_000_000) + " Mbps (inline)");
         try {
-            // Stop current recording first if active
-            if (wasRecording && recorder != null && recorder.isRecording()) {
-                logger.info("Stopping recording for bitrate change");
-                recorder.stopRecording();
-                // Wait for encoder to finish writing
-                Thread.sleep(500);
-            }
-            
-            // Reinitialize encoder with new bitrate
-            reinitializeEncoder();
-            
-            // Update bitrate controller
+            encoder.setBitrate(bitrate);
             if (bitrateController != null) {
                 bitrateController.setImmediateBitrate(bitrate);
             }
-            
-            // Restart recording if it was active
+            logger.info("Bitrate change applied: " + (bitrate / 1_000_000) + " Mbps");
+            return;
+        } catch (Exception e) {
+            logger.error("Inline bitrate change failed, falling back to encoder reinit: " + e.getMessage());
+        }
+
+        // Fallback path (rare — only if MediaCodec.setParameters threw).
+        // Full reinit cycle: stop recording, reinit encoder, restart.
+        boolean wasSurveillance = currentMode == Mode.SURVEILLANCE;
+        boolean wasNormalRecording = currentMode == Mode.NORMAL_RECORDING;
+        boolean wasRecording = isRecording() || pendingRecordingPrefix != null || recordingMode;
+
+        try {
+            if (wasRecording && recorder != null && recorder.isRecording()) {
+                logger.info("Stopping recording for bitrate change (fallback)");
+                recorder.stopRecording();
+                Thread.sleep(500);
+            }
+
+            reinitializeEncoder();
+
+            if (bitrateController != null) {
+                bitrateController.setImmediateBitrate(bitrate);
+            }
+
             if (wasRecording) {
                 if (wasSurveillance) {
                     logger.info("Restarting surveillance mode with new bitrate");
@@ -222,18 +248,20 @@ public class GpuSurveillancePipeline {
                 } else if (wasNormalRecording) {
                     logger.info("Restarting normal recording with new bitrate");
                     startRecording();
+                } else if (recordingMode || pendingRecordingPrefix != null) {
+                    logger.info("Restarting deferred recording with new bitrate");
+                    startRecording();
                 }
             }
-            
-            logger.info("Bitrate change applied successfully: " + (bitrate / 1_000_000) + " Mbps");
-            
+
+            logger.info("Bitrate change applied via fallback reinit: " + (bitrate / 1_000_000) + " Mbps");
+
         } catch (Exception e) {
             logger.error("Failed to apply bitrate change: " + e.getMessage(), e);
-            // Try to recover
             try {
                 if (wasSurveillance) {
                     enableSurveillance();
-                } else if (wasNormalRecording) {
+                } else if (wasNormalRecording || recordingMode || pendingRecordingPrefix != null) {
                     startRecording();
                 }
             } catch (Exception e2) {
@@ -297,7 +325,8 @@ public class GpuSurveillancePipeline {
 
         boolean wasSurveillance = currentMode == Mode.SURVEILLANCE;
         boolean wasNormalRecording = currentMode == Mode.NORMAL_RECORDING;
-        boolean wasRecording = isRecording();
+        // See applyBitrateChangeLocked for why deferred-recording counts as recording.
+        boolean wasRecording = isRecording() || pendingRecordingPrefix != null || recordingMode;
 
         try {
             if (wasRecording && recorder != null && recorder.isRecording()) {
@@ -314,6 +343,10 @@ public class GpuSurveillancePipeline {
                     enableSurveillance();
                 } else if (wasNormalRecording) {
                     startRecording();
+                } else if (recordingMode || pendingRecordingPrefix != null) {
+                    // Deferred-recording window — see applyBitrateChangeLocked
+                    // for the full reasoning.
+                    startRecording();
                 }
             }
             logger.info("FPS change applied successfully: " + clamped + " fps");
@@ -321,7 +354,7 @@ public class GpuSurveillancePipeline {
             logger.error("Failed to apply FPS change: " + e.getMessage(), e);
             try {
                 if (wasSurveillance) enableSurveillance();
-                else if (wasNormalRecording) startRecording();
+                else if (wasNormalRecording || recordingMode || pendingRecordingPrefix != null) startRecording();
             } catch (Exception e2) {
                 logger.error("Failed to recover after FPS change error", e2);
             }
@@ -358,10 +391,11 @@ public class GpuSurveillancePipeline {
         }
         
         logger.info("Codec change requested: " + codec.displayName + " - reinitializing encoder");
-        
+
         boolean wasSurveillance = currentMode == Mode.SURVEILLANCE;
         boolean wasNormalRecording = currentMode == Mode.NORMAL_RECORDING;
-        boolean wasRecording = isRecording();
+        // See applyBitrateChangeLocked for why deferred-recording counts as recording.
+        boolean wasRecording = isRecording() || pendingRecordingPrefix != null || recordingMode;
         
         try {
             // Stop current recording first if active
@@ -383,18 +417,22 @@ public class GpuSurveillancePipeline {
                 } else if (wasNormalRecording) {
                     logger.info("Restarting normal recording with new codec");
                     startRecording();
+                } else if (recordingMode || pendingRecordingPrefix != null) {
+                    // Deferred-recording window — see applyBitrateChangeLocked.
+                    logger.info("Restarting deferred recording with new codec");
+                    startRecording();
                 }
             }
-            
+
             logger.info("Codec change applied successfully: " + codec.displayName);
-            
+
         } catch (Exception e) {
             logger.error("Failed to apply codec change: " + e.getMessage(), e);
             // Try to recover by restarting what was running
             try {
                 if (wasSurveillance) {
                     enableSurveillance();
-                } else if (wasNormalRecording) {
+                } else if (wasNormalRecording || recordingMode || pendingRecordingPrefix != null) {
                     startRecording();
                 }
             } catch (Exception e2) {
@@ -402,7 +440,155 @@ public class GpuSurveillancePipeline {
             }
         }
     }
-    
+
+    /**
+     * Applies multiple encoder reconfig knobs in a single stop / reinit /
+     * restart cycle. The web UI's Quality tab Apply sends quality + codec +
+     * fps together; calling apply*Change three times in sequence stops the
+     * recorder once but each subsequent call observes wasRecording=false
+     * (the deferred-start window) and skips its restart, leaving the pipeline
+     * with no recording. Coalescing avoids that and also avoids three
+     * back-to-back encoder reinits when one suffices.
+     *
+     * <p>Pass {@code null} for any knob you don't want to change.
+     */
+    public void applyBatchedChange(
+            GpuPipelineConfig.RecordingQuality quality,
+            GpuPipelineConfig.VideoCodec codec,
+            Integer fps) {
+        synchronized (reconfigLock) {
+            // Three knobs, three different reconfig costs:
+            //   - Bitrate: inline via MediaCodec.setParameters(VIDEO_BITRATE).
+            //     Encoder stays alive, recording continues without a gap.
+            //     setBitrate() also resizes the pre-record buffer to match.
+            //   - FPS: camera HAL emission rate is inline via setCameraFps;
+            //     encoder's KEY_FRAME_RATE is metadata for rate control and
+            //     can ONLY be set at create time. We deliberately leave the
+            //     encoder running with stale KEY_FRAME_RATE — bitrate accuracy
+            //     drifts slightly until a natural reinit (codec/quality
+            //     change or ACC cycle), but recording keeps producing frames
+            //     with zero gap. Mirrors how SurveillanceEngineGpu treats
+            //     setCameraTargetFps as a hint, not a teardown trigger.
+            //   - Codec: requires full encoder reinit. There is no MediaCodec
+            //     API for runtime codec change; KEY_MIME_TYPE is set at
+            //     configure() and the encoder must be released and recreated.
+            //
+            // So we only stop / reinit / restart when codec actually changes.
+            // Quality- and FPS-only updates are inline.
+            boolean codecChanged = false;
+            int newBitrate = -1;
+
+            if (quality != null) {
+                config.setRecordingQuality(quality);
+                int eff = config.getEffectiveBitrate();
+                if (encoder != null && encoder.getBitrate() != eff) {
+                    newBitrate = eff;
+                }
+            }
+            if (codec != null) {
+                config.setVideoCodec(codec);
+                String want = config.getCodecMimeType();
+                if (encoder == null || !encoder.getCodecMimeType().equals(want)) {
+                    codecChanged = true;
+                }
+            }
+            int clampedFps = -1;
+            if (fps != null) {
+                clampedFps = Math.max(10, Math.min(30, fps));
+                try {
+                    org.json.JSONObject cameraCfg = com.overdrive.app.config.UnifiedConfigManager
+                        .loadConfig().optJSONObject("camera");
+                    if (cameraCfg == null) cameraCfg = new org.json.JSONObject();
+                    cameraCfg.put("targetFps", clampedFps);
+                    com.overdrive.app.config.UnifiedConfigManager.updateSection("camera", cameraCfg);
+                } catch (Exception e) {
+                    logger.warn("Batched apply: failed to persist targetFps: " + e.getMessage());
+                }
+                if (camera != null) camera.setTargetFps(clampedFps);
+            }
+
+            if (encoder == null) {
+                logger.info("Batched apply: encoder not yet initialized — settings persisted, will apply on init");
+                return;
+            }
+
+            // Inline-update path: bitrate change without codec change. Encoder
+            // stays alive, recording continues seamlessly.
+            if (!codecChanged) {
+                if (newBitrate > 0) {
+                    try {
+                        encoder.setBitrate(newBitrate);
+                        if (bitrateController != null) {
+                            bitrateController.setImmediateBitrate(newBitrate);
+                        }
+                        logger.info("Batched apply: inline bitrate "
+                            + (newBitrate / 1_000_000) + " Mbps");
+                    } catch (Exception e) {
+                        logger.warn("Batched apply: inline bitrate failed: " + e.getMessage());
+                    }
+                }
+                if (clampedFps > 0) {
+                    // Resize the encoder's pre-record buffer pool to match.
+                    // Doesn't touch MediaCodec — KEY_FRAME_RATE is configure-only
+                    // per the Android API. The encoder keeps producing at the
+                    // surface's actual delivery rate; rate control recalibrates
+                    // over a few seconds.
+                    encoder.setTargetFps(clampedFps);
+                    logger.info("Batched apply: inline FPS " + clampedFps
+                        + " (camera HAL + encoder buffer pool resized; encoder"
+                        + " KEY_FRAME_RATE remains configure-time)");
+                }
+                if (newBitrate <= 0 && clampedFps <= 0) {
+                    logger.info("Batched apply: nothing changed");
+                }
+                return;
+            }
+
+            // Codec-change path: full reinit cycle. Stops current recording,
+            // releases old encoder, creates new one with the new MIME type
+            // (and the latest bitrate/fps from config), restarts recording.
+            logger.info("Batched apply: codec changed — reinitializing encoder (quality=" + quality
+                + ", codec=" + codec + ", fps=" + (fps == null ? "n/a" : clampedFps) + ")");
+
+            boolean wasSurveillance = currentMode == Mode.SURVEILLANCE;
+            boolean wasNormalRecording = currentMode == Mode.NORMAL_RECORDING;
+            boolean wasRecording = isRecording() || pendingRecordingPrefix != null || recordingMode;
+
+            try {
+                if (wasRecording && recorder != null && recorder.isRecording()) {
+                    recorder.stopRecording();
+                    Thread.sleep(500);
+                }
+
+                reinitializeEncoder();
+
+                if (bitrateController != null && newBitrate > 0) {
+                    bitrateController.setImmediateBitrate(newBitrate);
+                }
+
+                if (wasRecording) {
+                    if (wasSurveillance) {
+                        enableSurveillance();
+                    } else if (wasNormalRecording) {
+                        startRecording();
+                    } else if (recordingMode || pendingRecordingPrefix != null) {
+                        // Deferred-recording window — see applyBitrateChangeLocked.
+                        startRecording();
+                    }
+                }
+                logger.info("Batched apply: codec reinit complete");
+            } catch (Exception e) {
+                logger.error("Batched apply failed: " + e.getMessage(), e);
+                try {
+                    if (wasSurveillance) enableSurveillance();
+                    else if (wasNormalRecording || recordingMode || pendingRecordingPrefix != null) startRecording();
+                } catch (Exception e2) {
+                    logger.error("Batched apply: recovery failed", e2);
+                }
+            }
+        }
+    }
+
     /**
      * Returns true if the encoder is alive and its configured FPS no longer
      * matches the user's selected FPS in unified config. Caller (typically
@@ -496,13 +682,42 @@ public class GpuSurveillancePipeline {
             " @ " + fps + "fps, " + (bitrate / 1_000_000) + " Mbps");
 
         encoder = new HardwareEventRecorderGpu(encoderWidth, encoderHeight, fps, bitrate, codecMimeType);
-        // FIX (Bug A): on encoder reinit (codec/bitrate change), keep the user's
-        // configured pre-record duration so the buffer doesn't reset to 5s.
+        // On encoder reinit (codec change), restore the pre-record window
+        // from the source-of-truth config for the ACTIVE recording mode.
+        // Without mode-awareness, a codec change while in PROXIMITY_GUARD
+        // would silently revert to the sentry/surveillance value, ignoring
+        // the proximity tab's slider until the next setMode() cycle.
+        //
+        // The proximity controller's setPreRecordDuration call (after
+        // reinit completes) is the long-term source of truth, but we seed
+        // the encoder here with the right value up-front so the byte
+        // ring's first allocations / window are correctly sized.
         try {
-            SurveillanceConfigManager cfgMgr = new SurveillanceConfigManager();
-            if (cfgMgr.configExists()) {
-                SurveillanceConfig survCfg = cfgMgr.loadConfig();
-                encoder.setPreRecordDuration(survCfg.getPreRecordSeconds());
+            int preRecordSec = -1;
+            // Prefer proximity's value when the active mode is proximity guard.
+            try {
+                com.overdrive.app.recording.RecordingModeManager rmm =
+                    com.overdrive.app.daemon.CameraDaemon.getRecordingModeManager();
+                if (rmm != null
+                        && rmm.getCurrentMode() == com.overdrive.app.recording.RecordingModeManager.Mode.PROXIMITY_GUARD) {
+                    org.json.JSONObject pgCfg =
+                        com.overdrive.app.config.UnifiedConfigManager.getProximityGuard();
+                    int v = pgCfg.optInt("preRecordSeconds", -1);
+                    if (v > 0) preRecordSec = v;
+                }
+            } catch (Throwable t) {
+                logger.debug("Proximity-mode pre-record lookup failed: " + t.getMessage());
+            }
+            // Fallback: surveillance config (the historical source).
+            if (preRecordSec <= 0) {
+                SurveillanceConfigManager cfgMgr = new SurveillanceConfigManager();
+                if (cfgMgr.configExists()) {
+                    SurveillanceConfig survCfg = cfgMgr.loadConfig();
+                    preRecordSec = survCfg.getPreRecordSeconds();
+                }
+            }
+            if (preRecordSec > 0) {
+                encoder.setPreRecordDuration(preRecordSec);
             }
         } catch (Exception e) {
             logger.warn("Failed to apply pre-record duration on reinit: " + e.getMessage());
@@ -571,9 +786,29 @@ public class GpuSurveillancePipeline {
         if (bitrateController != null) {
             bitrateController = new AdaptiveBitrateController(encoder, bitrate);
         }
-        
-        logger.info("Encoder reinitialized successfully: " + 
-            (codecMimeType.contains("hevc") ? "H.265" : "H.264") + 
+
+        // Preserve deferred-recording intent across the encoder swap. If the
+        // user had recording active and a chain of apply* calls reinit the
+        // encoder more than once (multi-setting POST: quality + codec + fps),
+        // the format-available listener registered against the prior encoder
+        // dies with it — and `wasRecording = isRecording()` reads false on
+        // the second/third apply, so the normal restart path skips. Re-arm
+        // the listener here so the new encoder's first frame still triggers
+        // checkPendingRecording().
+        if (recordingMode || pendingRecordingPrefix != null) {
+            encoder.setFormatAvailableListener(() -> {
+                new Thread(() -> {
+                    try {
+                        checkPendingRecording();
+                    } catch (Exception e) {
+                        logger.warn("Deferred recording start (post-reinit) failed: " + e.getMessage());
+                    }
+                }, "PendingRecKickoffReinit").start();
+            });
+        }
+
+        logger.info("Encoder reinitialized successfully: " +
+            (codecMimeType.contains("hevc") ? "H.265" : "H.264") +
             " @ " + (bitrate / 1_000_000) + " Mbps");
     }
     
@@ -645,18 +880,43 @@ public class GpuSurveillancePipeline {
             " @ " + fps + "fps, " + (bitrate / 1_000_000) + " Mbps");
         encoder = new HardwareEventRecorderGpu(encoderWidth, encoderHeight, fps, bitrate, codecMimeType);
 
-        // FIX (Bug A): pre-load saved pre-record duration BEFORE encoder.init() so the
-        // shared circular buffer is allocated at the right size on first init. Without
-        // this the buffer is allocated with the hardcoded 5s default and only resized
-        // on the next user-initiated settings save.
+        // Pre-load saved pre-record duration BEFORE encoder.init() so the
+        // byte ring is sized correctly on first allocation. Mode-aware:
+        // when the persisted mode is PROXIMITY_GUARD, prefer the proximity
+        // tab's value so cold boot is symmetric with the codec-reinit
+        // path (see reinitializeEncoder at the same point in the file).
+        // Without this, cold boot with mode=PROXIMITY_GUARD briefly sizes
+        // the ring to surveillance's value before proximityController.start()
+        // resizes it; functionally fine (no realloc) but inconsistent.
         SurveillanceConfig preLoadedConfig = null;
+        int preRecordSec = -1;
         try {
-            SurveillanceConfigManager configManager = new SurveillanceConfigManager();
-            if (configManager.configExists()) {
-                preLoadedConfig = configManager.loadConfig();
-                encoder.setPreRecordDuration(preLoadedConfig.getPreRecordSeconds());
-                logger.info("Pre-applied pre-record duration from saved config: "
-                        + preLoadedConfig.getPreRecordSeconds() + "s");
+            // Mode-aware preference: read mode FROM CONFIG (RecordingModeManager
+            // isn't yet constructed at this point in init()). UnifiedConfigManager
+            // exposes the persisted mode under recording.mode.
+            try {
+                org.json.JSONObject recCfg =
+                    com.overdrive.app.config.UnifiedConfigManager.getRecording();
+                String persistedMode = recCfg.optString("mode", "");
+                if ("PROXIMITY_GUARD".equals(persistedMode)) {
+                    org.json.JSONObject pgCfg =
+                        com.overdrive.app.config.UnifiedConfigManager.getProximityGuard();
+                    int v = pgCfg.optInt("preRecordSeconds", -1);
+                    if (v > 0) preRecordSec = v;
+                }
+            } catch (Throwable t) {
+                logger.debug("Cold-boot mode-aware pre-record lookup failed: " + t.getMessage());
+            }
+            if (preRecordSec <= 0) {
+                SurveillanceConfigManager configManager = new SurveillanceConfigManager();
+                if (configManager.configExists()) {
+                    preLoadedConfig = configManager.loadConfig();
+                    preRecordSec = preLoadedConfig.getPreRecordSeconds();
+                }
+            }
+            if (preRecordSec > 0) {
+                encoder.setPreRecordDuration(preRecordSec);
+                logger.info("Pre-applied pre-record duration: " + preRecordSec + "s");
             }
         } catch (Exception e) {
             logger.warn("Failed to pre-load config (will retry after init): " + e.getMessage());
@@ -704,6 +964,25 @@ public class GpuSurveillancePipeline {
         sentry = new SurveillanceEngineGpu();
         sentry.init(eventOutputDir, downscaler, assetManager, context);  // Pass Context for Java TFLite
         sentry.setRecorder(recorder);  // Share recorder with normal recording
+        // Per-vehicle camera-tile height for the foveated FOV scaling math
+        // in DistanceEstimator. Seal=960, Tang=720. Without this the
+        // foveated path uses a Seal-specific 0.66 ratio and reads ~30%
+        // long on Tang.
+        sentry.setCameraStripHeight(cameraHeight);
+        // Per-quadrant vertical FOV from the active camera profile.
+        // Without this, the engine uses uniform 110° for all four
+        // quadrants — which inflates side-camera distances by ~70%
+        // because side mirrors carry tighter optics than the
+        // front/rear ultra-wide fisheyes.
+        com.overdrive.app.camera.CameraProfile profile = resolvedCamera.getProfile();
+        if (profile != null) {
+            sentry.setCameraVerticalFovDeg(new float[]{
+                    profile.getVerticalFovDeg(0),
+                    profile.getVerticalFovDeg(1),
+                    profile.getVerticalFovDeg(2),
+                    profile.getVerticalFovDeg(3),
+            });
+        }
 
         // 4b. Apply saved config (use the pre-loaded one if available so we don't
         // hit disk twice).
@@ -1417,17 +1696,45 @@ public class GpuSurveillancePipeline {
         wsStreamServer.setIdleShutdownCallback(new Runnable() {
             @Override
             public void run() {
-                logger.info("WebSocket idle timeout - stopping streaming and pipeline");
+                logger.info("WebSocket idle timeout - stopping streaming");
                 // Run on separate thread to avoid blocking timer thread
                 new Thread(new Runnable() {
                     @Override
                     public void run() {
                         try {
                             self.disableStreaming();
-                            // Only stop pipeline if surveillance is not active
-                            if (currentMode != Mode.SURVEILLANCE && running) {
-                                logger.info("Surveillance not active - stopping pipeline to save resources");
+                            // Snapshot every cross-thread field once. Without this, a
+                            // concurrent stop() can null `recorder` between the null
+                            // check and the isRecording() call, NPEing into the
+                            // outer catch and leaving streaming half-released.
+                            GpuMosaicRecorder rec = recorder;
+                            boolean recordingActive = rec != null && rec.isRecording();
+                            Mode mode = currentMode;
+                            boolean keepAlive = false;
+                            try {
+                                java.util.concurrent.Callable<Boolean> hook = keepAlivePredicate;
+                                if (hook != null) keepAlive = Boolean.TRUE.equals(hook.call());
+                            } catch (Exception e) {
+                                logger.warn("keepAlive predicate threw: " + e.getMessage());
+                            }
+                            // Keep pipeline running if ANY consumer still needs the camera/encoder:
+                            //   - SURVEILLANCE: motion-triggered recording
+                            //   - NORMAL_RECORDING: continuous / drive-mode recording
+                            //   - active recorder: event recording in flight (proximity, manual)
+                            //   - pending deferred recording: startRecording() before encoder ready
+                            //   - keepAlive hook: PROXIMITY_GUARD MONITORING (radar armed, no
+                            //     recording yet) — without this the pipeline would tear
+                            //     down between trigger windows and the next event would
+                            //     silently no-op against a null recorder.
+                            boolean pendingRec = pendingRecordingDir != null;
+                            if (mode == Mode.IDLE && !recordingActive && !pendingRec && !keepAlive && running) {
+                                logger.info("No recording consumers active - stopping pipeline to save resources");
                                 self.stop();
+                            } else {
+                                logger.info("Pipeline kept alive (mode=" + mode
+                                    + ", recording=" + recordingActive
+                                    + ", pending=" + pendingRec
+                                    + ", keepAlive=" + keepAlive + ")");
                             }
                         } catch (Exception e) {
                             logger.error("Error during idle shutdown", e);
@@ -1582,7 +1889,22 @@ public class GpuSurveillancePipeline {
     public boolean isRunning() {
         return running;
     }
-    
+
+    /**
+     * Register an external predicate that the WebSocket idle-shutdown
+     * callback consults before tearing the pipeline down. Returning true
+     * keeps the pipeline alive even when no recording is currently in
+     * flight — used by PROXIMITY_GUARD MONITORING (radar armed, waiting
+     * for trigger).
+     *
+     * <p>Pass {@code null} to clear. Predicate is called from the
+     * IdleShutdown thread; implementation must be thread-safe and
+     * non-blocking.
+     */
+    public void setKeepAlivePredicate(java.util.concurrent.Callable<Boolean> predicate) {
+        this.keepAlivePredicate = predicate;
+    }
+
     /**
      * Gets the camera component.
      * 

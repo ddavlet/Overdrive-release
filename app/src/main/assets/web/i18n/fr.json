@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "L'image est définie  le message personnalisé est ignoré.",
     "screen_deterrent_image": "Image personnalisée ou GIF",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, jusqu'à 8 Mo. Remplace l'ensemble de l'écran.",
+    "themes_title": "Thèmes par Giovanni Mirulla",
+    "download_set": "Télécharger et appliquer",
+    "downloading": "Téléchargement...",
+    "applied": "Appliqué !",
+    "failed": "Échec",
+    "test_on_screen": "Tester à l'écran",
     "screen_deterrent_upload": "La charge est élevée",
     "screen_deterrent_replace": "Remplacez l'image",
     "screen_deterrent_remove": "L'image de l'écran",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "Clignoter",
     "cmd_find": "Localiser",
     "cmd_live": "En direct",
+    "cmd_recordings": "Enregistrements",
     "cmd_trunk_open": "Trunk ouvert",
     "cmd_trunk_close": "Coupe de porte fermée",
     "cmd_trips": "Trajets",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "il y a {n} h",
     "toast_command_sent": "Commande envoyée",
     "toast_command_failed": "Échec de la commande",
-    "toast_no_location": "Position du véhicule indisponible",
-    "cmd_recordings": "Enregistrements"
+    "toast_no_location": "Position du véhicule indisponible"
   }
 }

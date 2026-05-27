@@ -87,14 +87,32 @@ public class ProximityGuardController implements ProximityRadarMonitor.TriggerCa
             logger.warn("Cannot start - already in state: " + currentState);
             return;
         }
-        
+
         // Reload config in case it changed (for trigger level, pre/post record settings)
         config = loadConfig();
-        
+
         // SOTA: Don't check config.isEnabled() here - the mode selection in RecordingModeManager
         // is the source of truth for whether proximity guard should be active.
         // The config.enabled flag is deprecated/redundant.
-        
+
+        // Push the proximity tab's pre-record duration into the encoder.
+        // Without this, the encoder's pre-record window stays at whatever
+        // SurveillanceConfig set it to (default 5s), and the proximity
+        // tab's preRecordSeconds slider is silently ignored — the user
+        // sets 10s but gets 5s of pre-roll. The encoder owns ONE
+        // shared pre-record buffer across recording paths, so this
+        // setting wins for as long as proximity is the active mode.
+        try {
+            com.overdrive.app.surveillance.HardwareEventRecorderGpu enc = pipeline.getEncoder();
+            if (enc != null) {
+                enc.setPreRecordDuration(config.getPreRecordSeconds());
+                logger.info("Pre-record duration set from proximity config: "
+                    + config.getPreRecordSeconds() + "s");
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to apply proximity pre-record duration: " + e.getMessage());
+        }
+
         logger.info("Starting Proximity Guard mode...");
         transitionTo(State.MONITORING);
         radarMonitor.startListening();
@@ -266,6 +284,18 @@ public class ProximityGuardController implements ProximityRadarMonitor.TriggerCa
      */
     public synchronized void reloadConfig() {
         config = loadConfig();
+        // Apply pre-record duration to the encoder so live UI changes take
+        // effect without an ACC cycle. Symmetric with start().
+        if (currentState != State.IDLE) {
+            try {
+                com.overdrive.app.surveillance.HardwareEventRecorderGpu enc = pipeline.getEncoder();
+                if (enc != null) {
+                    enc.setPreRecordDuration(config.getPreRecordSeconds());
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to re-apply pre-record duration on reload: " + e.getMessage());
+            }
+        }
         logger.info("Config reloaded: " + config.toString());
     }
     

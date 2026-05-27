@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "Immagine impostata  il messaggio personalizzato viene ignorato.",
     "screen_deterrent_image": "Immagine o GIF personalizzate",
     "screen_deterrent_image_desc": "PNG / JPG / WebP / GIF, fino a 8 MB. Sostituisce l'intero schermo.",
+    "themes_title": "Temi di Giovanni Mirulla",
+    "download_set": "Scarica e applica",
+    "downloading": "Scaricamento...",
+    "applied": "Applicato!",
+    "failed": "Non riuscito",
+    "test_on_screen": "Prova su schermo",
     "screen_deterrent_upload": "Carica",
     "screen_deterrent_replace": "Sostituisci immagine",
     "screen_deterrent_remove": "Immagine rimossa",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "Lampeggia",
     "cmd_find": "Trova",
     "cmd_live": "Live",
+    "cmd_recordings": "Registrazioni",
     "cmd_trunk_open": "Apri bagagliaio",
     "cmd_trunk_close": "Chiudi bagagliaio",
     "cmd_trips": "Viaggi",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n} h fa",
     "toast_command_sent": "Comando inviato",
     "toast_command_failed": "Comando non riuscito",
-    "toast_no_location": "Posizione del veicolo non disponibile",
-    "cmd_recordings": "Registrazioni"
+    "toast_no_location": "Posizione del veicolo non disponibile"
   }
 }

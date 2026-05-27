@@ -194,12 +194,30 @@ public class QualitySettingsApiHandler {
     /**
      * Send storage limit settings.
      */
+    /** Throttle for the auto-refresh in sendStorageSettings. Without this,
+     * a USB-not-inserted user (extremely common — most installs are SD-only)
+     * triggers a full discoverVolumes cycle on every poll of /api/settings/storage,
+     * which the UI fires every ~10s. The refresh runs `sm list-volumes` and a
+     * `/proc/mounts` parse + StatFs probes — cheap individually but spammy
+     * in the log and competing with the storage path under heavy load.
+     * 30s is well below the time scale of physical insert/remove events. */
+    private static volatile long lastAutoRefreshMs = 0L;
+    private static final long AUTO_REFRESH_MIN_INTERVAL_MS = 30_000L;
+
     private static void sendStorageSettings(OutputStream out) throws Exception {
         StorageManager storage = StorageManager.getInstance();
-        
-        // SOTA: Refresh SD/USB detection if either isn't currently available.
-        // Handles the case where the volume was inserted after app start.
-        if (!storage.isSdCardAvailable() || !storage.isUsbAvailable()) {
+
+        // Refresh SD/USB detection only when BOTH are missing (handles
+        // post-boot inserts) AND not too recently. Previously this fired
+        // on every poll for any user who didn't have a USB stick inserted —
+        // since `!isUsbAvailable()` is true forever in that config — driving
+        // a discoverVolumes cycle every ~10s. Narrowing the trigger to
+        // genuinely-degraded state + a 30s throttle eliminates the spam.
+        boolean sdMissing = !storage.isSdCardAvailable();
+        boolean usbMissing = !storage.isUsbAvailable();
+        long now = System.currentTimeMillis();
+        if ((sdMissing || usbMissing) && (now - lastAutoRefreshMs) > AUTO_REFRESH_MIN_INTERVAL_MS) {
+            lastAutoRefreshMs = now;
             storage.refreshSdCard();  // refreshes both SD and USB
         }
 
@@ -464,61 +482,50 @@ public class QualitySettingsApiHandler {
             JSONObject request = new JSONObject(body);
             String section = request.optString("section", "");
             JSONObject data = request.optJSONObject("data");
-            
+
             if (section.isEmpty() || data == null) {
                 HttpResponse.sendJsonError(out, Messages.get("errors.quality_missing_section_or_data"));
                 return;
             }
-            
-            File unifiedFile = new File(UNIFIED_CONFIG_FILE);
-            JSONObject unified;
-            
-            if (unifiedFile.exists()) {
-                BufferedReader reader = new BufferedReader(new FileReader(unifiedFile));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    sb.append(line);
+
+            // Route through UnifiedConfigManager so the in-memory cache stays
+            // consistent and registered listeners fire. The previous direct
+            // file-read/merge/write bypassed the cache: any other writer
+            // (StorageManager, ExternalStorageCleaner) within the same mtime
+            // second could merge into a stale cache and clobber this section.
+            boolean ok = com.overdrive.app.config.UnifiedConfigManager.updateSection(section, data);
+            if (!ok) {
+                HttpResponse.sendJsonError(out, "updateSection returned false");
+                return;
+            }
+
+            // Push live changes to the running subsystems for sections that
+            // have stateful runtime consumers. UnifiedConfigManager.updateSection
+            // persists the value but doesn't itself notify in-process consumers
+            // — without this dispatch the user's slider sits in the file while
+            // the running encoder/controller keeps using the old value until
+            // the next ACC cycle.
+            if ("proximityGuard".equals(section)) {
+                try {
+                    com.overdrive.app.recording.RecordingModeManager rmm =
+                        CameraDaemon.getRecordingModeManager();
+                    if (rmm != null) {
+                        rmm.reloadConfig();
+                    }
+                } catch (Exception e) {
+                    CameraDaemon.log("proximityGuard reloadConfig dispatch failed: " + e.getMessage());
                 }
-                reader.close();
-                unified = new JSONObject(sb.toString());
-            } else {
-                unified = new JSONObject();
-                unified.put("version", 1);
             }
-            
-            // SOTA: Merge into existing section (not replace) to preserve keys
-            // that are set independently (e.g. surveillanceEnabled is set via toggle,
-            // not via the detection settings form). Replacing would wipe it.
-            JSONObject existingSection = unified.optJSONObject(section);
-            if (existingSection == null) {
-                existingSection = new JSONObject();
-            }
-            java.util.Iterator<String> keys = data.keys();
-            while (keys.hasNext()) {
-                String key = keys.next();
-                existingSection.put(key, data.get(key));
-            }
-            unified.put(section, existingSection);
-            unified.put("lastModified", System.currentTimeMillis());
-            
-            // Write back
-            FileWriter writer = new FileWriter(unifiedFile);
-            writer.write(unified.toString(2));
-            writer.close();
-            
-            unifiedFile.setReadable(true, false);
-            unifiedFile.setWritable(true, false);
-            
+
             CameraDaemon.log("Unified config section '" + section + "' updated");
-            
+
             JSONObject response = new JSONObject();
             response.put("success", true);
             response.put("section", section);
             response.put("message", Messages.get("messages.quality_config_section_updated"));
-            
+
             HttpResponse.sendJson(out, response.toString());
-            
+
         } catch (Exception e) {
             CameraDaemon.log("Error updating unified config: " + e.getMessage());
             HttpResponse.sendJsonError(out, e.getMessage());
@@ -723,21 +730,85 @@ public class QualitySettingsApiHandler {
     private static void handleQualitySettingsPost(OutputStream out, String body) throws Exception {
         try {
             JSONObject settings = new JSONObject(body);
-            
+
+            // Tracks per-field rejections so the UI can surface "we kept the
+            // old value for X" instead of silently treating an invalid input
+            // as a successful save. Empty when everything was accepted.
+            org.json.JSONArray rejected = new org.json.JSONArray();
+
+            // ── Resolve & validate the three encoder-reconfig knobs first ────
+            // (quality, codec, fps). They are routed through a single batched
+            // pipeline call so the encoder reinits at most once and the
+            // recording-resume runs at most once. Calling the per-knob
+            // setters in sequence used to leave recording dead in the
+            // multi-setting case: the second/third call observed
+            // isRecording()==false (deferred start window after the first)
+            // and skipped its restart.
+            String pendingQuality = null;
             if (settings.has("recordingQuality")) {
                 String tier = settings.getString("recordingQuality").toUpperCase();
                 if (tier.equals("ECONOMY") || tier.equals("STANDARD")
                         || tier.equals("HIGH") || tier.equals("PREMIUM")
                         || tier.equals("MAX")) {
+                    pendingQuality = tier;
                     recordingQuality = tier;
                     CameraDaemon.log("Recording quality set to: " + tier);
-                    CameraDaemon.setRecordingQuality(tier);
                 } else {
                     CameraDaemon.log("Rejecting recordingQuality=" + tier
                         + " — must be one of ECONOMY/STANDARD/HIGH/PREMIUM/MAX");
+                    rejected.put(new JSONObject()
+                        .put("field", "recordingQuality").put("value", tier)
+                        .put("reason", "invalid tier"));
                 }
             }
 
+            // Legacy `recordingBitrate` key (LOW/MEDIUM/HIGH) — translate
+            // to the new tier system. UI should send `recordingQuality`
+            // directly going forward; this branch only catches old clients.
+            if (pendingQuality == null && settings.has("recordingBitrate")) {
+                String legacy = settings.getString("recordingBitrate").toUpperCase();
+                String tier;
+                switch (legacy) {
+                    case "LOW":    tier = "ECONOMY"; break;
+                    case "MEDIUM": tier = "STANDARD"; break;
+                    case "HIGH":   tier = "HIGH"; break;
+                    default:       tier = "STANDARD"; break;
+                }
+                CameraDaemon.log("Legacy recordingBitrate=" + legacy + " → recordingQuality=" + tier);
+                pendingQuality = tier;
+                recordingQuality = tier;
+            }
+
+            String pendingCodec = null;
+            if (settings.has("recordingCodec")) {
+                String codec = settings.getString("recordingCodec").toUpperCase();
+                if (codec.equals("H264") || codec.equals("H265")) {
+                    pendingCodec = codec;
+                    recordingCodec = codec;
+                    CameraDaemon.log("Recording codec set to: " + codec);
+                } else {
+                    CameraDaemon.log("Rejecting recordingCodec=" + codec + " — must be H264 or H265");
+                    rejected.put(new JSONObject()
+                        .put("field", "recordingCodec").put("value", codec)
+                        .put("reason", "must be H264 or H265"));
+                }
+            }
+
+            Integer pendingFps = null;
+            if (settings.has("cameraFps")) {
+                int fps = settings.getInt("cameraFps");
+                if (fps < 10 || fps > 30) {
+                    CameraDaemon.log("Rejecting cameraFps=" + fps + " — out of range [10..30]");
+                    rejected.put(new JSONObject()
+                        .put("field", "cameraFps").put("value", fps)
+                        .put("reason", "out of range [10..30]"));
+                } else {
+                    pendingFps = fps;
+                }
+            }
+
+            // Streaming quality is a separate encoder; it doesn't share the
+            // recording reinit cycle, so route it through its own setter.
             if (settings.has("streamingQuality")) {
                 String streamQuality = settings.getString("streamingQuality").toUpperCase();
                 if (streamQuality.equals("ULTRA_LOW") || streamQuality.equals("LOW")
@@ -751,57 +822,34 @@ public class QualitySettingsApiHandler {
                 }
             }
 
-            // Legacy `recordingBitrate` key (LOW/MEDIUM/HIGH) — translate
-            // to the new tier system. UI should send `recordingQuality`
-            // directly going forward; this branch only catches old clients.
-            if (settings.has("recordingBitrate") && !settings.has("recordingQuality")) {
-                String legacy = settings.getString("recordingBitrate").toUpperCase();
-                String tier;
-                switch (legacy) {
-                    case "LOW":    tier = "ECONOMY"; break;
-                    case "MEDIUM": tier = "STANDARD"; break;
-                    case "HIGH":   tier = "HIGH"; break;
-                    default:       tier = "STANDARD"; break;
+            // ── Apply the recording-encoder knobs in a single batched call ───
+            com.overdrive.app.surveillance.GpuSurveillancePipeline pipeline = CameraDaemon.getGpuPipeline();
+            if (pipeline != null) {
+                com.overdrive.app.surveillance.GpuPipelineConfig.RecordingQuality qualityEnum = null;
+                if (pendingQuality != null) {
+                    qualityEnum = com.overdrive.app.surveillance.GpuPipelineConfig.RecordingQuality
+                        .fromString(pendingQuality);
                 }
-                CameraDaemon.log("Legacy recordingBitrate=" + legacy + " → recordingQuality=" + tier);
-                recordingQuality = tier;
-                CameraDaemon.setRecordingQuality(tier);
-            }
-            
-            if (settings.has("recordingCodec")) {
-                String codec = settings.getString("recordingCodec").toUpperCase();
-                if (codec.equals("H264") || codec.equals("H265")) {
-                    recordingCodec = codec;
-                    CameraDaemon.log("Recording codec set to: " + codec);
-                    CameraDaemon.setRecordingCodec(codec);
+                com.overdrive.app.surveillance.GpuPipelineConfig.VideoCodec codecEnum = null;
+                if (pendingCodec != null) {
+                    codecEnum = "H265".equals(pendingCodec)
+                        ? com.overdrive.app.surveillance.GpuPipelineConfig.VideoCodec.H265
+                        : com.overdrive.app.surveillance.GpuPipelineConfig.VideoCodec.H264;
                 }
-            }
-            
-            if (settings.has("cameraFps")) {
-                int fps = settings.getInt("cameraFps");
-                if (fps < 10 || fps > 30) {
-                    CameraDaemon.log("Rejecting cameraFps=" + fps + " — out of range [10..30]");
-                } else {
-                    // applyFpsChange persists to UnifiedConfig, propagates to
-                    // the camera, and reinitializes the encoder so KEY_FRAME_RATE
-                    // matches. No restart required — change is live.
-                    com.overdrive.app.surveillance.GpuSurveillancePipeline pipeline = CameraDaemon.getGpuPipeline();
-                    if (pipeline != null) {
-                        pipeline.applyFpsChange(fps);
-                        CameraDaemon.log("Camera FPS applied: " + fps);
-                    } else {
-                        // Pipeline not yet created — persist so init() picks it up.
-                        try {
-                            org.json.JSONObject camCfg = com.overdrive.app.config.UnifiedConfigManager
-                                .loadConfig().optJSONObject("camera");
-                            if (camCfg == null) camCfg = new org.json.JSONObject();
-                            camCfg.put("targetFps", fps);
-                            com.overdrive.app.config.UnifiedConfigManager.updateSection("camera", camCfg);
-                            CameraDaemon.log("Camera FPS saved (pipeline not ready): " + fps);
-                        } catch (Exception e) {
-                            CameraDaemon.log("Failed to save camera FPS: " + e.getMessage());
-                        }
-                    }
+                if (qualityEnum != null || codecEnum != null || pendingFps != null) {
+                    pipeline.applyBatchedChange(qualityEnum, codecEnum, pendingFps);
+                }
+            } else if (pendingFps != null) {
+                // Pipeline not yet created — persist FPS so init() picks it up.
+                try {
+                    org.json.JSONObject camCfg = com.overdrive.app.config.UnifiedConfigManager
+                        .loadConfig().optJSONObject("camera");
+                    if (camCfg == null) camCfg = new org.json.JSONObject();
+                    camCfg.put("targetFps", pendingFps);
+                    com.overdrive.app.config.UnifiedConfigManager.updateSection("camera", camCfg);
+                    CameraDaemon.log("Camera FPS saved (pipeline not ready): " + pendingFps);
+                } catch (Exception e) {
+                    CameraDaemon.log("Failed to save camera FPS: " + e.getMessage());
                 }
             }
             
@@ -811,7 +859,12 @@ public class QualitySettingsApiHandler {
             response.put("recordingCodec", recordingCodec);
             response.put("note", recordingCodec.equals("H265") ?
                 Messages.get("messages.quality_h265_note") : null);
-            
+            // UI distinguishes silent rejections (kept old value) from a
+            // genuine save by checking response.rejected.length > 0.
+            if (rejected.length() > 0) {
+                response.put("rejected", rejected);
+            }
+
             persistSettings();
             
             HttpResponse.sendJson(out, response.toString());

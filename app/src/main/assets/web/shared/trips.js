@@ -551,14 +551,26 @@ const TRIPS = {
 
         if (btn) { btn.disabled = true; btn.textContent = BYD.i18n.t('trip.applying'); }
 
+        let rejected = null;
         try {
             // Save storage settings
             if (Object.keys(body).length > 0) {
-                await fetch('/api/trips/storage', {
+                const resp = await fetch('/api/trips/storage', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
                 });
+                // Surface rejections so the user sees when SD/USB wasn't
+                // available (server keeps the prior storage type) instead of
+                // the prior silent-success behavior. The server now echoes
+                // appliedType/appliedLimitMb so loadStorageSettings can
+                // refresh the UI to the actual committed state.
+                try {
+                    const data = await resp.clone().json();
+                    if (data && data.rejected && data.rejected.length) {
+                        rejected = data.rejected;
+                    }
+                } catch (e) { /* response parse non-fatal */ }
             }
 
             // Save cost config
@@ -567,10 +579,19 @@ const TRIPS = {
             this.pendingStorageType = null;
             this.pendingStorageLimit = null;
             if (btn) {
-                btn.textContent = BYD.i18n.t('trip.applied_check');
+                btn.textContent = rejected ? BYD.i18n.t('trip.apply_changes') : BYD.i18n.t('trip.applied_check');
                 setTimeout(() => { btn.textContent = BYD.i18n.t('trip.apply_changes'); btn.disabled = true; }, 2000);
             }
+            // Re-sync the UI to the actual committed state. With rejections
+            // the UI may have shown the user picking SD_CARD but the server
+            // kept INTERNAL — loadStorageSettings re-renders the toggle to
+            // match the truth.
             await this.loadStorageSettings();
+
+            if (rejected && BYD.utils && BYD.utils.toast) {
+                const fields = rejected.map(function (r) { return r.field; }).join(', ');
+                BYD.utils.toast('Some values rejected: ' + fields, 'warn');
+            }
         } catch (e) {
             console.warn('[Trips] Apply storage failed:', e);
             if (btn) { btn.disabled = false; btn.textContent = BYD.i18n.t('trip.apply_changes'); }

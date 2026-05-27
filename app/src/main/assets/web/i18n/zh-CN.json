@@ -977,6 +977,12 @@
     "screen_deterrent_override_banner": "设置图像  默认消息正在被忽略. 清除图像以使用消息.",
     "screen_deterrent_image": "定制图像或GIF",
     "screen_deterrent_image_desc": "可更换整个屏幕.",
+    "themes_title": "乔瓦尼·米鲁拉的主题",
+    "download_set": "下载 & 设置",
+    "downloading": "下载",
+    "applied": "应用!",
+    "failed": "失败",
+    "test_on_screen": "屏幕测试",
     "screen_deterrent_upload": "装载上升",
     "screen_deterrent_replace": "取代图像",
     "screen_deterrent_remove": "删除图像",
@@ -1665,6 +1671,7 @@
     "cmd_flash": "闪灯",
     "cmd_find": "寻车",
     "cmd_live": "实时",
+    "cmd_recordings": "录像",
     "cmd_trunk_open": "开放箱子",
     "cmd_trunk_close": "关闭行李箱",
     "cmd_trips": "行程",
@@ -1681,7 +1688,6 @@
     "time_hours_ago": "{n}小时前",
     "toast_command_sent": "命令已发送",
     "toast_command_failed": "命令失败",
-    "toast_no_location": "无法获取车辆位置",
-    "cmd_recordings": "录像"
+    "toast_no_location": "无法获取车辆位置"
   }
 }

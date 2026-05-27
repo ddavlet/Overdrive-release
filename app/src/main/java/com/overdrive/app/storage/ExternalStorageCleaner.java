@@ -361,11 +361,11 @@ public class ExternalStorageCleaner {
     /**
      * Save configuration to config file.
      */
-    public void saveConfig() {
+    public synchronized void saveConfig() {
         try {
             File configFile = new File(CONFIG_FILE);
             JSONObject config;
-            
+
             if (configFile.exists()) {
                 BufferedReader reader = new BufferedReader(new FileReader(configFile));
                 StringBuilder sb = new StringBuilder();
@@ -379,12 +379,12 @@ public class ExternalStorageCleaner {
                 config = new JSONObject();
                 config.put("version", 1);
             }
-            
+
             JSONObject extCleanup = config.optJSONObject("externalCleanup");
             if (extCleanup == null) {
                 extCleanup = new JSONObject();
             }
-            
+
             extCleanup.put("enabled", enabled);
             extCleanup.put("reservedSpaceMb", reservedSpaceMb);
             extCleanup.put("protectedHours", protectedHours);
@@ -392,17 +392,26 @@ public class ExternalStorageCleaner {
             if (cdrPath != null) {
                 extCleanup.put("cdrPath", cdrPath);
             }
-            
+
             config.put("externalCleanup", extCleanup);
             config.put("lastModified", System.currentTimeMillis());
-            
+
             java.io.FileWriter writer = new java.io.FileWriter(configFile);
             writer.write(config.toString(2));
             writer.close();
-            
+
             configFile.setReadable(true, false);
             configFile.setWritable(true, false);
-            
+
+            // UnifiedConfigManager caches this same file; without invalidating
+            // its cache, the next updateSection() call within ~1s mtime
+            // granularity merges into a stale config and clobbers our write.
+            try {
+                com.overdrive.app.config.UnifiedConfigManager.forceReload();
+            } catch (Throwable t) {
+                logWarn("UnifiedConfigManager.forceReload() failed: " + t.getMessage());
+            }
+
             logInfo("Saved external cleanup config");
         } catch (Exception e) {
             logError("Could not save external cleanup config: " + e.getMessage());
@@ -487,65 +496,96 @@ public class ExternalStorageCleaner {
         }
     }
     
-    /**
-     * Get total size of CDR recordings in bytes.
-     */
+    // ===================== Walk-result cache =====================
+    //
+    // /api/storage/external used to fire FOUR independent recursive walks of
+    // the BYD CDR (dashcam) tree on every call: getCdrUsage, getCdrFileCount,
+    // getProtectedSize, getDeletableSize. On a populated SD with tens of GB of
+    // dashcam clips that's seconds of FUSE binder traffic per call. The web
+    // UI polls every ~3 s and fires this endpoint multiple times after each
+    // settings save, saturating the SD's mount and starving the StorageManager
+    // watchdog probe (which falsely declares the card unmounted).
+    //
+    // We collapse the four accessors into a single recursive walk per
+    // WALK_TTL_MS window. Cleanup paths must invalidate the cache (set
+    // walkAt = 0) so freshly-deleted files don't show up as "still there".
+    private static final long WALK_TTL_MS = 10_000L;
+    private volatile long walkAt = 0L;
+    private volatile long cachedUsage = 0L;
+    private volatile int  cachedCount = 0;
+    private volatile long cachedProtected = 0L;
+    private volatile long cachedDeletable = 0L;
+
+    /** Refresh the cached snapshot if older than the TTL. Synchronized so a
+     * burst of /api/storage/external calls collapses to a single walk; the
+     * second caller observes the cache populated by the first. */
+    private synchronized void refreshWalkIfStale() {
+        if (cdrPath == null) {
+            cachedUsage = 0; cachedCount = 0;
+            cachedProtected = 0; cachedDeletable = 0;
+            walkAt = System.currentTimeMillis();
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - walkAt < WALK_TTL_MS) return;
+
+        List<File> files = getCdrVideoFiles();          // ONE walk
+        long protCutoff = now - (protectedHours * 3600L * 1000L);
+
+        long usage = 0, prot = 0, del = 0;
+        int n = files.size();
+        // Sort newest-first for the deletable computation.
+        files.sort((a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        for (int i = 0; i < n; i++) {
+            File f = files.get(i);
+            long sz = f.length();
+            long m = f.lastModified();
+            usage += sz;
+            if (m > protCutoff) {
+                prot += sz;
+            } else if (i >= minFilesKeep) {
+                del += sz;
+            }
+        }
+        cachedUsage = usage;
+        cachedCount = n;
+        cachedProtected = prot;
+        cachedDeletable = del;
+        walkAt = now;
+    }
+
+    /** Force the next get* call to re-walk. Called from cleanup paths after
+     * file deletions so the cached numbers don't lie. */
+    void invalidateWalkCache() {
+        walkAt = 0;
+    }
+
+    /** Get total size of CDR recordings in bytes (cached, ≤ {@value #WALK_TTL_MS} ms stale). */
     public long getCdrUsage() {
         if (cdrPath == null) return 0;
-        return getDirectorySize(new File(cdrPath));
+        refreshWalkIfStale();
+        return cachedUsage;
     }
-    
-    /**
-     * Get count of CDR video files.
-     */
+
+    /** Get count of CDR video files (cached). */
     public int getCdrFileCount() {
         if (cdrPath == null) return 0;
-        List<File> files = getCdrVideoFiles();
-        return files.size();
+        refreshWalkIfStale();
+        return cachedCount;
     }
-    
-    /**
-     * Get size of protected files (within protection window).
-     */
+
+    /** Get size of protected files (within protection window). Cached. */
     public long getProtectedSize() {
         if (cdrPath == null) return 0;
-        
-        long protectionCutoff = System.currentTimeMillis() - (protectedHours * 3600L * 1000L);
-        long protectedSize = 0;
-        
-        for (File file : getCdrVideoFiles()) {
-            if (file.lastModified() > protectionCutoff) {
-                protectedSize += file.length();
-            }
-        }
-        
-        return protectedSize;
+        refreshWalkIfStale();
+        return cachedProtected;
     }
-    
-    /**
-     * Get size of deletable files (outside protection window, excluding min keep).
-     */
+
+    /** Get size of deletable files (outside protection window, excluding min keep). Cached. */
     public long getDeletableSize() {
         if (cdrPath == null) return 0;
-        
-        List<File> files = getCdrVideoFiles();
-        if (files.size() <= minFilesKeep) return 0;
-        
-        // Sort newest first
-        files.sort((a, b) -> Long.compare(b.lastModified(), a.lastModified()));
-        
-        long protectionCutoff = System.currentTimeMillis() - (protectedHours * 3600L * 1000L);
-        long deletableSize = 0;
-        
-        // Skip the newest minFilesKeep files
-        for (int i = minFilesKeep; i < files.size(); i++) {
-            File file = files.get(i);
-            if (file.lastModified() < protectionCutoff) {
-                deletableSize += file.length();
-            }
-        }
-        
-        return deletableSize;
+        refreshWalkIfStale();
+        return cachedDeletable;
     }
     
     private long getDirectorySize(File dir) {
@@ -767,10 +807,15 @@ public class ExternalStorageCleaner {
         totalBytesFreed += freed;
         totalFilesDeleted += deleted;
         lastCleanupTime = System.currentTimeMillis();
-        
-        logInfo("CDR cleanup complete: freed " + formatSize(freed) + 
+
+        // Invalidate the walk cache so the next get* call sees the post-cleanup
+        // state (avoids the UI showing stale "deletable size" right after a
+        // cleanup completes).
+        invalidateWalkCache();
+
+        logInfo("CDR cleanup complete: freed " + formatSize(freed) +
             " (" + deleted + " files)");
-        
+
         return new CleanupResult(freed, deleted, deletedFiles);
     }
     

@@ -595,20 +595,48 @@ public class TripApiHandler {
             JSONObject bodyJson = new JSONObject(body != null ? body : "{}");
             StorageManager sm = StorageManager.getInstance();
 
+            // Track per-field rejections so the UI can show "we kept the
+            // old value for X" instead of the prior silent-failure pattern
+            // where setTripsStorageType returned false (SD/USB not mounted)
+            // but the handler returned {success:true} regardless.
+            org.json.JSONArray rejected = new org.json.JSONArray();
+            String requestedType = null;
+
             if (bodyJson.has("storageType")) {
                 String typeStr = bodyJson.getString("storageType");
+                requestedType = typeStr;
                 StorageManager.StorageType type;
                 if ("SD_CARD".equalsIgnoreCase(typeStr))      type = StorageManager.StorageType.SD_CARD;
                 else if ("USB".equalsIgnoreCase(typeStr))     type = StorageManager.StorageType.USB;
                 else                                           type = StorageManager.StorageType.INTERNAL;
-                sm.setTripsStorageType(type);
+                boolean accepted = sm.setTripsStorageType(type);
+                if (!accepted) {
+                    String reason = (type == StorageManager.StorageType.SD_CARD)
+                        ? "SD card not available — kept previous storage type"
+                        : (type == StorageManager.StorageType.USB)
+                            ? "USB drive not available — kept previous storage type"
+                            : "could not switch to internal storage";
+                    rejected.put(new JSONObject()
+                        .put("field", "storageType")
+                        .put("value", typeStr)
+                        .put("reason", reason));
+                    logger.warn("Trips storage type change rejected: " + typeStr + " (" + reason + ")");
+                }
             }
 
             boolean limitChanged = false;
+            long appliedLimit = -1;
             if (bodyJson.has("storageLimitMb")) {
                 long limitMb = bodyJson.getLong("storageLimitMb");
                 sm.setTripsLimitMb(limitMb);
+                appliedLimit = sm.getTripsLimitMb();
                 limitChanged = true;
+                if (appliedLimit != limitMb) {
+                    rejected.put(new JSONObject()
+                        .put("field", "storageLimitMb")
+                        .put("value", limitMb)
+                        .put("reason", "clamped to per-volume max " + appliedLimit + "MB"));
+                }
             }
 
             // Mirror the recordings/surveillance handler: enforce the new limit
@@ -628,6 +656,14 @@ public class TripApiHandler {
 
             JSONObject response = new JSONObject();
             response.put("success", true);
+            // Echo the live state so the UI can re-sync after a partial-rejection
+            // save (the slider may have snapped to a different value, the
+            // storage type may have stayed at INTERNAL).
+            response.put("appliedType", sm.getTripsStorageType().name());
+            response.put("appliedLimitMb", sm.getTripsLimitMb());
+            if (rejected.length() > 0) {
+                response.put("rejected", rejected);
+            }
             return response;
 
         } catch (Exception e) {
