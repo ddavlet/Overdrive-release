@@ -94,6 +94,15 @@ public class SurveillanceApiHandler {
             handleScreenDeterrentImageGet(out);
             return true;
         }
+        if (cleanPath.equals("/api/surveillance/screen-deterrent/test") && method.equals("POST")) {
+            try {
+                com.overdrive.app.surveillance.ScreenDeterrent.getInstance().onMotionDetected();
+                HttpResponse.sendJsonSuccess(out);
+            } catch (Exception e) {
+                HttpResponse.sendJsonError(out, "Failed to trigger screen deterrent: " + e.getMessage());
+            }
+            return true;
+        }
         return false;
     }
 

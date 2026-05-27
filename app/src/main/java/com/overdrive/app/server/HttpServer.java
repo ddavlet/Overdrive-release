@@ -116,7 +116,8 @@ public class HttpServer {
             } catch (Exception e) {
                 CameraDaemon.log("Could not extract BYD Bangcle tables: " + e.getMessage());
             }
-            
+
+
             CameraDaemon.log("Web assets extracted to " + WEB_ROOT);
         } catch (Exception e) {
             CameraDaemon.log("Failed to extract web assets: " + e.getMessage());

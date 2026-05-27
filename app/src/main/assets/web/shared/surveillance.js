@@ -2447,6 +2447,49 @@ BYD.surveillance = {
                 previewImg.removeAttribute('src');
             }
         }
+    },
+
+    downloadAndSetTheme: function(url, filename, btn) {
+        var origText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span data-i18n="surveillance.downloading">Downloading...</span>';
+        
+        var self = this;
+        fetch(url)
+            .then(function(res) {
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return res.blob();
+            })
+            .then(function(blob) {
+                var file = new File([blob], filename, { type: blob.type || 'image/gif' });
+                self.uploadScreenDeterrentImage(file);
+                btn.innerHTML = '<span data-i18n="surveillance.applied">Applied!</span>';
+                setTimeout(function() {
+                    btn.innerHTML = origText;
+                    btn.disabled = false;
+                }, 2000);
+            })
+            .catch(function(err) {
+                console.error('[deterrent] theme download failed:', err);
+                btn.innerHTML = '<span data-i18n="surveillance.failed">Failed</span>';
+                setTimeout(function() {
+                    btn.innerHTML = origText;
+                    btn.disabled = false;
+                }, 2000);
+                if (BYD.utils && BYD.utils.toast) BYD.utils.toast('Failed to download theme', 'error');
+            });
+    },
+
+    testScreenDeterrent: function() {
+        fetch('/api/surveillance/screen-deterrent/test', { method: 'POST' })
+            .then(function(res) {
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                if (BYD.utils && BYD.utils.toast) BYD.utils.toast('Deterrent triggered', 'success');
+            })
+            .catch(function(err) {
+                console.error('[deterrent] test failed:', err);
+                if (BYD.utils && BYD.utils.toast) BYD.utils.toast('Failed to trigger deterrent', 'error');
+            });
     }
 };
 
