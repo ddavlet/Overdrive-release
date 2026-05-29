@@ -913,8 +913,9 @@ class WebViewFragment : Fragment() {
                 val url = java.net.URL(urlStr)
                 conn = url.openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection
                 conn.requestMethod = method
-                conn.connectTimeout = 8000
-                conn.readTimeout = 10000
+                val isBydCloudApi = url.path.startsWith("/api/bydcloud")
+                conn.connectTimeout = if (isBydCloudApi) 10000 else 8000
+                conn.readTimeout = if (isBydCloudApi) 60000 else 10000
                 conn.instanceFollowRedirects = false
 
                 // Parse and set headers

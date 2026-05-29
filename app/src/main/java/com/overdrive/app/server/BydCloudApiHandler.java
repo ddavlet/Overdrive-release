@@ -4,6 +4,7 @@ import com.overdrive.app.byd.cloud.BydCloudClient;
 import com.overdrive.app.byd.cloud.BydCloudConfig;
 import com.overdrive.app.byd.cloud.BydCloudDataProvider;
 import com.overdrive.app.byd.cloud.BydCloudDeterrent;
+import com.overdrive.app.byd.cloud.BydCloudRegionCatalog;
 import com.overdrive.app.byd.cloud.crypto.BydCryptoUtils;
 import com.overdrive.app.config.UnifiedConfigManager;
 import com.overdrive.app.daemon.CameraDaemon;
@@ -127,8 +128,8 @@ public class BydCloudApiHandler {
      *   "username": "user@example.com",
      *   "password": "rawPassword",
      *   "controlPin": "123456",
-     *   "countryCode": "NL",   // optional, default "NL"
-     *   "language": "en"       // optional, default "en"
+     *   "countryCode": "GB",   // optional, maps to server region
+     *   "language": "en"       // optional, defaults from country
      * }
      */
     private static void handleSetup(OutputStream out, String body) throws Exception {
@@ -139,28 +140,23 @@ public class BydCloudApiHandler {
             String username = req.optString("username", "").trim();
             String password = req.optString("password", "").trim();
             String controlPin = req.optString("controlPin", "").trim();
-            String countryCode = req.optString("countryCode", "NL").trim();
-            String language = req.optString("language", "en").trim();
-            String region = req.optString("region", "eu").trim();
+            String countryCode = BydCloudRegionCatalog.normalizeCountryCode(req.optString("countryCode", ""));
+            String language = req.optString("language", "").trim();
+            String requestedRegion = BydCloudRegionCatalog.normalizeRegion(req.optString("region", ""));
 
-            // Auto-map countryCode from region
-            java.util.Map<String, String> regionToCountry = new java.util.HashMap<>();
-            regionToCountry.put("eu", "NL");
-            regionToCountry.put("in", "IN");
-            regionToCountry.put("au", "AU");
-            regionToCountry.put("sg", "SG");
-            regionToCountry.put("br", "BR");
-            regionToCountry.put("jp", "JP");
-            regionToCountry.put("kr-ali", "KR");
-            regionToCountry.put("sa", "SA");
-            regionToCountry.put("tr", "TR");
-            regionToCountry.put("mx", "MX");
-            regionToCountry.put("id", "ID");
-            regionToCountry.put("vn", "VN");
-            regionToCountry.put("no", "NO");
-            regionToCountry.put("uz", "UZ");
-            String mapped = regionToCountry.get(region);
-            if (mapped != null) countryCode = mapped;
+            // Country is the source of truth. Multiple country codes can share
+            // one BYD node, so derive region from the same catalog used by the UI.
+            if (countryCode.isEmpty()) {
+                countryCode = BydCloudRegionCatalog.defaultCountryForRegion(requestedRegion);
+            }
+            if (!BydCloudRegionCatalog.isSupportedCountryCode(countryCode)) {
+                logger.warn("Unsupported BYD countryCode=" + countryCode + "; falling back to default");
+                countryCode = BydCloudRegionCatalog.DEFAULT_COUNTRY_CODE;
+            }
+            String region = BydCloudRegionCatalog.regionForCountryCode(countryCode);
+            if (language.isEmpty()) {
+                language = BydCloudRegionCatalog.languageForCountryCode(countryCode);
+            }
 
             // Validate inputs
             if (username.isEmpty()) {
@@ -175,13 +171,16 @@ public class BydCloudApiHandler {
             String loginKey;
             String signPassword;
             String commandPwd;
+            String rawPasswordForSave;
 
             if (!password.isEmpty()) {
                 loginKey = BydCryptoUtils.pwdLoginKey(password);
                 signPassword = BydCryptoUtils.md5Hex(password);
+                rawPasswordForSave = password;
             } else if (existing.isConfigured()) {
                 loginKey = existing.loginKey;
                 signPassword = existing.signPassword;
+                rawPasswordForSave = existing.rawPassword;
             } else {
                 response.put("success", false);
                 response.put("error", Messages.get("errors.bydcloud_password_required_first_setup"));
@@ -213,7 +212,7 @@ public class BydCloudApiHandler {
 
             // Save credentials first (so BydCloudClient can read them)
             BydCloudConfig.saveCredentials(username, loginKey, signPassword,
-                    commandPwd, password, "", countryCode, language, region);
+                    commandPwd, rawPasswordForSave, "", countryCode, language, region);
             logger.info("  Credentials saved to unified config");
 
             // Test login
@@ -278,7 +277,7 @@ public class BydCloudApiHandler {
 
             // Save with VIN and energyType
             BydCloudConfig.saveCredentials(username, loginKey, signPassword,
-                    commandPwd, password, vin, countryCode, language, region,
+                    commandPwd, rawPasswordForSave, vin, countryCode, language, region,
                     energyType, mergeToggle);
 
             // Reset deterrent so it picks up new credentials

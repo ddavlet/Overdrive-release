@@ -13,7 +13,6 @@ public final class BydCloudConfig {
 
     private static final String BASE_URL_PREFIX = "https://dilinkappoversea-";
     private static final String BASE_URL_SUFFIX = ".byd.auto";
-    private static final String DEFAULT_REGION = "eu";  // Europe (default for most overseas)
     private static final String USER_AGENT = "okhttp/4.12.0";
 
     public final boolean enabled;
@@ -43,9 +42,15 @@ public final class BydCloudConfig {
         this.commandPwd = commandPwd;
         this.rawPassword = rawPassword;
         this.vin = vin;
-        this.countryCode = countryCode;
-        this.language = language;
-        this.region = (region != null && !region.isEmpty()) ? region : DEFAULT_REGION;
+        String normalizedRegion = BydCloudRegionCatalog.normalizeRegion(region);
+        String normalizedCountryCode = BydCloudRegionCatalog.normalizeCountryCode(countryCode);
+        this.countryCode = BydCloudRegionCatalog.isSupportedCountryCode(normalizedCountryCode)
+                ? normalizedCountryCode
+                : BydCloudRegionCatalog.defaultCountryForRegion(normalizedRegion);
+        this.language = (language != null && !language.isEmpty())
+                ? language
+                : BydCloudRegionCatalog.languageForCountryCode(this.countryCode);
+        this.region = BydCloudRegionCatalog.regionForCountryCode(this.countryCode);
         this.cloudDataMerge = cloudDataMerge;
         this.energyType = energyType != null ? energyType : "";
         // Device fingerprint derived from username (matches Niek/BYD-re)
@@ -64,7 +69,10 @@ public final class BydCloudConfig {
         JSONObject config = UnifiedConfigManager.loadConfig();
         JSONObject bydCloud = config.optJSONObject("bydCloud");
         if (bydCloud == null) {
-            return new BydCloudConfig(false, "", "", "", "", "", "", "NL", "en", DEFAULT_REGION, false, "");
+            return new BydCloudConfig(false, "", "", "", "", "", "",
+                    BydCloudRegionCatalog.DEFAULT_COUNTRY_CODE,
+                    BydCloudRegionCatalog.DEFAULT_LANGUAGE,
+                    BydCloudRegionCatalog.DEFAULT_REGION, false, "");
         }
 
         String storedRawPassword = bydCloud.optString("rawPassword", "");
@@ -83,9 +91,9 @@ public final class BydCloudConfig {
                 bydCloud.optString("commandPwd", ""),
                 rawPassword,
                 bydCloud.optString("vin", ""),
-                bydCloud.optString("countryCode", "NL"),
-                bydCloud.optString("language", "en"),
-                bydCloud.optString("region", DEFAULT_REGION),
+                bydCloud.optString("countryCode", BydCloudRegionCatalog.DEFAULT_COUNTRY_CODE),
+                bydCloud.optString("language", BydCloudRegionCatalog.DEFAULT_LANGUAGE),
+                bydCloud.optString("region", BydCloudRegionCatalog.DEFAULT_REGION),
                 bydCloud.optBoolean("cloudDataMerge", false),
                 bydCloud.optString("energyType", "")
         );
@@ -123,7 +131,7 @@ public final class BydCloudConfig {
     }
 
     public String getBaseUrl() {
-        return BASE_URL_PREFIX + region + BASE_URL_SUFFIX;
+        return BASE_URL_PREFIX + BydCloudRegionCatalog.normalizeRegion(region) + BASE_URL_SUFFIX;
     }
 
     public String getUserAgent() {
@@ -157,9 +165,16 @@ public final class BydCloudConfig {
             bydCloud.put("commandPwd", commandPwd);
             bydCloud.put("rawPassword", CredentialCipher.encrypt(rawPassword));
             bydCloud.put("vin", vin);
-            bydCloud.put("countryCode", countryCode);
-            bydCloud.put("language", language);
-            bydCloud.put("region", region);
+            String normalizedCountryCode = BydCloudRegionCatalog.normalizeCountryCode(countryCode);
+            if (!BydCloudRegionCatalog.isSupportedCountryCode(normalizedCountryCode)) {
+                normalizedCountryCode = BydCloudRegionCatalog.defaultCountryForRegion(region);
+            }
+            String normalizedRegion = BydCloudRegionCatalog.regionForCountryCode(normalizedCountryCode);
+            bydCloud.put("countryCode", normalizedCountryCode);
+            bydCloud.put("language", (language != null && !language.isEmpty())
+                    ? language
+                    : BydCloudRegionCatalog.languageForCountryCode(normalizedCountryCode));
+            bydCloud.put("region", normalizedRegion);
             bydCloud.put("cloudDataMerge", cloudDataMerge);
             if (energyType != null && !energyType.isEmpty()) {
                 bydCloud.put("energyType", energyType);

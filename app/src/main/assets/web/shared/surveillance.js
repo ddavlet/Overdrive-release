@@ -2500,8 +2500,191 @@ window.SurvSettings = BYD.surveillance;
 
 window.BydCloud = {
     isConfigured: false,
+    regionLabels: {
+        eu: 'Europe',
+        sg: 'Singapore / APAC',
+        au: 'Australia',
+        br: 'Brazil',
+        jp: 'Japan',
+        uz: 'Uzbekistan',
+        no: 'Middle East / Africa',
+        mx: 'Mexico / Latin America',
+        id: 'Indonesia',
+        tr: 'Turkey',
+        kr: 'Korea',
+        in: 'India',
+        vn: 'Vietnam',
+        sa: 'Saudi Arabia',
+        om: 'Oman',
+        kz: 'Kazakhstan'
+    },
+    defaultCountriesByRegion: {
+        eu: 'GB', sg: 'SG', au: 'AU', br: 'BR', jp: 'JP', uz: 'UZ',
+        no: 'AE', mx: 'MX', id: 'ID', tr: 'TR', kr: 'KR', in: 'IN',
+        vn: 'VN', sa: 'SA', om: 'OM', kz: 'KZ'
+    },
+    countries: [
+        { name: 'Albania', code: 'AL', language: 'en', region: 'eu' },
+        { name: 'Argentina', code: 'AR', language: 'es', region: 'mx' },
+        { name: 'Australia', code: 'AU', language: 'en', region: 'au' },
+        { name: 'Austria', code: 'AT', language: 'de', region: 'eu' },
+        { name: 'Bahrain', code: 'BH', language: 'ar', region: 'no' },
+        { name: 'Bangladesh', code: 'BD', language: 'en', region: 'sg' },
+        { name: 'Belgium', code: 'BE', language: 'en', region: 'eu' },
+        { name: 'Bhutan', code: 'BT', language: 'en', region: 'sg' },
+        { name: 'Bolivia', code: 'BO', language: 'es', region: 'mx' },
+        { name: 'Bosnia and Herzegovina', code: 'BA', language: 'en', region: 'eu' },
+        { name: 'Brazil', code: 'BR', language: 'pt', region: 'br' },
+        { name: 'Brunei', code: 'BN', language: 'en', region: 'sg' },
+        { name: 'Bulgaria', code: 'BG', language: 'en', region: 'eu' },
+        { name: 'Cambodia', code: 'KH', language: 'en', region: 'sg' },
+        { name: 'Chile', code: 'CL', language: 'es', region: 'mx' },
+        { name: 'Colombia', code: 'CO', language: 'es', region: 'mx' },
+        { name: 'Costa Rica', code: 'CR', language: 'es', region: 'mx' },
+        { name: 'Croatia', code: 'HR', language: 'en', region: 'eu' },
+        { name: 'Cyprus', code: 'CY', language: 'en', region: 'eu' },
+        { name: 'Czech Republic', code: 'CZ', language: 'en', region: 'eu' },
+        { name: 'Denmark', code: 'DK', language: 'en', region: 'eu' },
+        { name: 'Dominican Republic', code: 'DO', language: 'es', region: 'mx' },
+        { name: 'Ecuador', code: 'EC', language: 'es', region: 'mx' },
+        { name: 'Egypt', code: 'EG', language: 'ar', region: 'no' },
+        { name: 'El Salvador', code: 'SV', language: 'es', region: 'mx' },
+        { name: 'Estonia', code: 'EE', language: 'en', region: 'eu' },
+        { name: 'Finland', code: 'FI', language: 'en', region: 'eu' },
+        { name: 'France', code: 'FR', language: 'fr', region: 'eu' },
+        { name: 'French Polynesia', code: 'PF', language: 'fr', region: 'sg' },
+        { name: 'Germany', code: 'DE', language: 'de', region: 'eu' },
+        { name: 'Greece', code: 'GR', language: 'en', region: 'eu' },
+        { name: 'Guatemala', code: 'GT', language: 'es', region: 'mx' },
+        { name: 'Hong Kong', code: 'HK', language: 'zh_TW', region: 'sg' },
+        { name: 'Honduras', code: 'HN', language: 'es', region: 'mx' },
+        { name: 'Hungary', code: 'HU', language: 'en', region: 'eu' },
+        { name: 'Iceland', code: 'IS', language: 'en', region: 'eu' },
+        { name: 'India', code: 'IN', language: 'en', region: 'in' },
+        { name: 'Indonesia', code: 'ID', language: 'id', region: 'id' },
+        { name: 'Ireland', code: 'IE', language: 'en', region: 'eu' },
+        { name: 'Israel', code: 'IL', language: 'he', region: 'eu' },
+        { name: 'Italy', code: 'IT', language: 'it', region: 'eu' },
+        { name: 'Japan', code: 'JP', language: 'ja', region: 'jp' },
+        { name: 'Jordan', code: 'JO', language: 'ar', region: 'no' },
+        { name: 'Kazakhstan', code: 'KZ', language: 'ru', region: 'kz' },
+        { name: 'Kosovo', code: 'XK', language: 'en', region: 'eu' },
+        { name: 'Kuwait', code: 'KW', language: 'ar', region: 'no' },
+        { name: 'Laos', code: 'LA', language: 'en', region: 'sg' },
+        { name: 'Latvia', code: 'LV', language: 'en', region: 'eu' },
+        { name: 'Liechtenstein', code: 'LI', language: 'de', region: 'eu' },
+        { name: 'Lithuania', code: 'LT', language: 'en', region: 'eu' },
+        { name: 'Luxembourg', code: 'LU', language: 'fr', region: 'eu' },
+        { name: 'Macao', code: 'MO', language: 'zh_TW', region: 'sg' },
+        { name: 'Malaysia', code: 'MY', language: 'en', region: 'sg' },
+        { name: 'Maldives', code: 'MV', language: 'en', region: 'sg' },
+        { name: 'Malta', code: 'MT', language: 'en', region: 'eu' },
+        { name: 'Mauritius', code: 'MU', language: 'en', region: 'no' },
+        { name: 'Mexico', code: 'MX', language: 'es', region: 'mx' },
+        { name: 'Moldova', code: 'MD', language: 'ru', region: 'eu' },
+        { name: 'Monaco', code: 'MC', language: 'fr', region: 'eu' },
+        { name: 'Mongolia', code: 'MN', language: 'en', region: 'sg' },
+        { name: 'Montenegro', code: 'ME', language: 'en', region: 'eu' },
+        { name: 'Morocco', code: 'MA', language: 'ar', region: 'no' },
+        { name: 'Myanmar', code: 'MM', language: 'en', region: 'sg' },
+        { name: 'Nepal', code: 'NP', language: 'en', region: 'sg' },
+        { name: 'Netherlands', code: 'NL', language: 'nl', region: 'eu' },
+        { name: 'New Caledonia', code: 'NC', language: 'fr', region: 'sg' },
+        { name: 'New Zealand', code: 'NZ', language: 'en', region: 'au' },
+        { name: 'Nicaragua', code: 'NI', language: 'es', region: 'mx' },
+        { name: 'North Macedonia', code: 'MK', language: 'en', region: 'eu' },
+        { name: 'Norway', code: 'NO', language: 'en', region: 'eu' },
+        { name: 'Oman', code: 'OM', language: 'ar', region: 'om' },
+        { name: 'Pakistan', code: 'PK', language: 'en', region: 'sg' },
+        { name: 'Panama', code: 'PA', language: 'es', region: 'mx' },
+        { name: 'Paraguay', code: 'PY', language: 'es', region: 'mx' },
+        { name: 'Peru', code: 'PE', language: 'es', region: 'mx' },
+        { name: 'Philippines', code: 'PH', language: 'en', region: 'sg' },
+        { name: 'Poland', code: 'PL', language: 'en', region: 'eu' },
+        { name: 'Portugal', code: 'PT', language: 'pt', region: 'eu' },
+        { name: 'Qatar', code: 'QA', language: 'ar', region: 'no' },
+        { name: 'Reunion Island', code: 'RE', language: 'fr', region: 'no' },
+        { name: 'Romania', code: 'RO', language: 'en', region: 'eu' },
+        { name: 'Saudi Arabia', code: 'SA', language: 'ar', region: 'sa' },
+        { name: 'Serbia', code: 'RS', language: 'en', region: 'eu' },
+        { name: 'Singapore', code: 'SG', language: 'en', region: 'sg' },
+        { name: 'Slovakia', code: 'SK', language: 'en', region: 'eu' },
+        { name: 'Slovenia', code: 'SI', language: 'en', region: 'eu' },
+        { name: 'South Africa', code: 'ZA', language: 'en', region: 'no' },
+        { name: 'South Korea', code: 'KR', language: 'ko', region: 'kr' },
+        { name: 'Spain', code: 'ES', language: 'es', region: 'eu' },
+        { name: 'Sri Lanka', code: 'LK', language: 'en', region: 'sg' },
+        { name: 'Sweden', code: 'SE', language: 'en', region: 'eu' },
+        { name: 'Switzerland', code: 'CH', language: 'de', region: 'eu' },
+        { name: 'Thailand', code: 'TH', language: 'th', region: 'sg' },
+        { name: 'Turkey', code: 'TR', language: 'tr', region: 'tr' },
+        { name: 'Ukraine', code: 'UA', language: 'ru', region: 'eu' },
+        { name: 'United Arab Emirates', code: 'AE', language: 'ar', region: 'no' },
+        { name: 'United Kingdom', code: 'GB', language: 'en', region: 'eu' },
+        { name: 'Uruguay', code: 'UY', language: 'es', region: 'mx' },
+        { name: 'Uzbekistan', code: 'UZ', language: 'ru', region: 'uz' },
+        { name: 'Vatican City', code: 'VA', language: 'it', region: 'eu' },
+        { name: 'Vietnam', code: 'VN', language: 'vi', region: 'vn' }
+    ],
+
+    normalizeRegion(region) {
+        if (region === 'kr-ali') return 'kr';
+        return this.regionLabels[region] ? region : 'eu';
+    },
+
+    ensureCountryOptions() {
+        const select = document.getElementById('bydCountryCode');
+        if (!select || select.dataset.loaded === '1') return;
+        select.innerHTML = '';
+        this.countryByCode = {};
+        for (var i = 0; i < this.countries.length; i++) {
+            var country = this.countries[i];
+            this.countryByCode[country.code] = country;
+            var opt = document.createElement('option');
+            opt.value = country.code;
+            opt.textContent = country.name + ' (' + country.code + ')';
+            select.appendChild(opt);
+        }
+        select.dataset.loaded = '1';
+    },
+
+    getCountryMeta(countryCode) {
+        this.ensureCountryOptions();
+        var code = (countryCode || '').trim().toUpperCase();
+        return (this.countryByCode && this.countryByCode[code]) || null;
+    },
+
+    countryForRegion(region) {
+        var normalized = this.normalizeRegion(region);
+        return this.defaultCountriesByRegion[normalized] || 'GB';
+    },
+
+    setRegionDisplay(region, countryCode) {
+        var normalized = this.normalizeRegion(region);
+        const regionSelect = document.getElementById('bydRegion');
+        const summary = document.getElementById('bydRegionDerived');
+        if (regionSelect) regionSelect.value = normalized;
+        if (summary) {
+            var label = this.regionLabels[normalized] || normalized.toUpperCase();
+            summary.textContent = 'Country code ' + (countryCode || 'GB') + ' uses the ' + label + ' BYD server.';
+        }
+    },
+
+    applyCountrySelection(countryCode, region) {
+        this.ensureCountryOptions();
+        var meta = this.getCountryMeta(countryCode);
+        if (!meta) {
+            var fallbackCode = this.countryForRegion(region || 'eu');
+            meta = this.getCountryMeta(fallbackCode) || this.getCountryMeta('GB');
+        }
+        const select = document.getElementById('bydCountryCode');
+        if (select && meta) select.value = meta.code;
+        this.setRegionDisplay(meta ? meta.region : this.normalizeRegion(region), meta ? meta.code : countryCode);
+    },
 
     async loadStatus() {
+        this.ensureCountryOptions();
+        this.applyCountrySelection('GB', 'eu');
         try {
             const resp = await fetch('/api/bydcloud/status');
             const data = await resp.json();
@@ -2512,6 +2695,15 @@ window.BydCloud = {
         } catch (e) {
             console.warn('Failed to load BYD Cloud status:', e);
         }
+    },
+
+    onCountryChange(countryCode) {
+        var meta = this.getCountryMeta(countryCode);
+        this.setRegionDisplay(meta ? meta.region : 'eu', meta ? meta.code : countryCode);
+    },
+
+    onRegionChange(region) {
+        this.setRegionDisplay(region, null);
     },
 
     updateStatusUI(status) {
@@ -2525,6 +2717,7 @@ window.BydCloud = {
         const pinHint = document.getElementById('bydPinHint');
         const pwdInput = document.getElementById('bydPassword');
         const pinInput = document.getElementById('bydPin');
+        this.applyCountrySelection(status.countryCode, status.region);
 
         if (status.verified) {
             this.isConfigured = true;
@@ -2537,8 +2730,6 @@ window.BydCloud = {
             if (clearSection) clearSection.style.display = 'block';
             if (testBtn) { testBtn.disabled = false; testBtn.style.color = 'var(--text-primary)'; testBtn.style.borderColor = 'var(--brand-primary)'; }
             if (emailInput) emailInput.value = status.username || '';
-            var regionSelect = document.getElementById('bydRegion');
-            if (regionSelect && status.region) regionSelect.value = status.region;
             if (pwdInput) pwdInput.placeholder = BYD.i18n.t('surveillance.byd_password_placeholder_keep');
             if (pinInput) pinInput.placeholder = BYD.i18n.t('surveillance.byd_pin_placeholder_keep');
             if (pwdHint) pwdHint.textContent = BYD.i18n.t('surveillance.byd_pwd_keep');
@@ -2643,7 +2834,9 @@ window.BydCloud = {
         const email = document.getElementById('bydEmail').value.trim();
         const password = document.getElementById('bydPassword').value.trim();
         const pin = document.getElementById('bydPin').value.trim();
-        const region = document.getElementById('bydRegion').value;
+        const countrySelect = document.getElementById('bydCountryCode');
+        const countryMeta = this.getCountryMeta(countrySelect ? countrySelect.value : 'GB') || this.getCountryMeta('GB');
+        const region = countryMeta ? countryMeta.region : 'eu';
         const saveBtn = document.getElementById('bydSaveBtn');
         // Preserve the icon + label so the finally block can restore it cleanly
         // after the request resolves; assigning .textContent strips the SVG.
@@ -2660,12 +2853,17 @@ window.BydCloud = {
         this.showStatus(BYD.i18n.t('surveillance.byd_save_progress'), 'info');
 
         try {
-            const body = { username: email, region: region };
+            const body = {
+                username: email,
+                region: region,
+                countryCode: countryMeta ? countryMeta.code : 'GB',
+                language: countryMeta ? countryMeta.language : 'en'
+            };
             if (password) body.password = password;
             if (pin) body.controlPin = pin;
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(function() { controller.abort(); }, 30000);
+            const timeoutId = setTimeout(function() { controller.abort(); }, 60000);
 
             const resp = await fetch('/api/bydcloud/setup', {
                 method: 'POST',
@@ -2706,7 +2904,7 @@ window.BydCloud = {
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(function() { controller.abort(); }, 30000);
+            const timeoutId = setTimeout(function() { controller.abort(); }, 60000);
 
             const resp = await fetch('/api/bydcloud/test', {
                 method: 'POST',
@@ -2755,6 +2953,7 @@ window.BydCloud = {
             document.getElementById('bydEmail').value = '';
             document.getElementById('bydPassword').value = '';
             document.getElementById('bydPin').value = '';
+            this.applyCountrySelection('GB', 'eu');
             const deterrentSelect = document.getElementById('deterrentAction');
             if (deterrentSelect && deterrentSelect.value !== 'silent') {
                 deterrentSelect.value = 'silent';
