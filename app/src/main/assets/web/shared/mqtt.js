@@ -157,7 +157,7 @@ const MQTT = {
                     <span>${BYD.i18n.t('mqtt.label_qos')}: ${conn.qos}</span>
                     <span>${BYD.i18n.t('mqtt.label_interval')}: ${this.fmtInterval(conn.minIntervalSeconds || conn.publishIntervalSeconds || 5)}–${this.fmtInterval(conn.maxIntervalSeconds || 300)}${conn.changeOnly !== false ? ' (' + BYD.i18n.t('mqtt.change_short') + ')' : ''}</span>
                     <span>${BYD.i18n.t('mqtt.label_retain')}: ${conn.retainMessages ? BYD.i18n.t('common.yes') : BYD.i18n.t('common.no')}</span>
-                    ${conn.homeAssistantDiscovery ? '<span>' + BYD.i18n.t('mqtt.ha_short') + '</span>' : ''}
+                    ${conn.homeAssistantDiscovery ? '<span>' + BYD.i18n.t('mqtt.ha_short') + (conn.allowControl ? ' + ' + BYD.i18n.t('mqtt.control_short') : '') + '</span>' : ''}
                     <span>${BYD.i18n.t('mqtt.label_proxy')}: ${s.proxyActive ? BYD.i18n.t('common.yes') : BYD.i18n.t('common.no')}</span>
                 </div>
             </div>
@@ -199,6 +199,7 @@ const MQTT = {
         document.getElementById('formChangeOnly').checked = true;
         document.getElementById('formHaDiscovery').checked = false;
         document.getElementById('formDiscoveryPrefix').value = 'homeassistant';
+        document.getElementById('formAllowControl').checked = false;
         document.getElementById('formRetain').checked = false;
         document.getElementById('formEnabled').checked = true;
         this.onSlider();
@@ -229,6 +230,7 @@ const MQTT = {
         document.getElementById('formChangeOnly').checked = conn.changeOnly !== false;
         document.getElementById('formHaDiscovery').checked = conn.homeAssistantDiscovery || false;
         document.getElementById('formDiscoveryPrefix').value = conn.discoveryPrefix || 'homeassistant';
+        document.getElementById('formAllowControl').checked = conn.allowControl || false;
         document.getElementById('formRetain').checked = conn.retainMessages || false;
         document.getElementById('formEnabled').checked = conn.enabled || false;
         this.onSlider();
@@ -262,11 +264,15 @@ const MQTT = {
         if (mx && mxl) mxl.textContent = this.fmtInterval(mx.value);
     },
 
-    // Show the discovery-prefix field only when HA discovery is enabled.
+    // Show the discovery-prefix field and the vehicle-control toggle only when
+    // HA discovery is enabled (control requires the discovery machinery).
     onHaToggle() {
         var ha = document.getElementById('formHaDiscovery');
-        var row = document.getElementById('formDiscoveryPrefixRow');
-        if (ha && row) row.style.display = ha.checked ? '' : 'none';
+        var on = ha && ha.checked;
+        var prefixRow = document.getElementById('formDiscoveryPrefixRow');
+        var controlRow = document.getElementById('formAllowControlRow');
+        if (prefixRow) prefixRow.style.display = on ? '' : 'none';
+        if (controlRow) controlRow.style.display = on ? 'flex' : 'none';
     },
 
     async saveForm() {
@@ -284,6 +290,7 @@ const MQTT = {
             changeOnly: document.getElementById('formChangeOnly').checked,
             homeAssistantDiscovery: document.getElementById('formHaDiscovery').checked,
             discoveryPrefix: (document.getElementById('formDiscoveryPrefix').value || 'homeassistant').trim(),
+            allowControl: document.getElementById('formAllowControl').checked,
             retainMessages: document.getElementById('formRetain').checked,
             enabled: document.getElementById('formEnabled').checked
         };

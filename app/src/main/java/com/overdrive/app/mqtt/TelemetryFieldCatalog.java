@@ -244,13 +244,26 @@ public final class TelemetryFieldCatalog {
         return f != null ? f.precision : 0;
     }
 
-    /** True if this key should produce an HA entity (registered, mappable, non-time). */
+    /** True if this key should produce a read-only HA sensor (registered, mappable, non-time). */
     public static boolean isDiscoverable(String key) {
         if (EXCLUDED.contains(key)) return false;
+        // setting_* keys are surfaced as controllable entities (switch/select/number) via
+        // VehicleControlCatalog, not as read-only sensors — skip the sensor component.
+        if (key.startsWith("setting_")) return false;
         Field f = FIELDS.get(key);
         // Unknown keys: discoverable by default (generic diagnostic sensor) — arrays are
         // filtered at publish time by value type, so this stays safe.
         return f == null || f.component != null;
+    }
+
+    /**
+     * True if this key's value should be published to its per-field state topic.
+     * Broader than {@link #isDiscoverable}: a key can carry state (e.g. {@code setting_*}
+     * read-back, or a control's state) without also generating a read-only sensor entity.
+     * Only time/monotonic keys are withheld.
+     */
+    public static boolean isPublishable(String key) {
+        return !EXCLUDED.contains(key);
     }
 
     /** "front_motor_rpm" -> "Front Motor Rpm" */

@@ -1,5 +1,8 @@
 package com.overdrive.app.mqtt;
 
+import com.overdrive.app.byd.BydDataCollector;
+import com.overdrive.app.byd.BydVehicleData;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -56,7 +59,7 @@ public final class HomeAssistantDiscovery {
      *                 so PHEV-only / model-specific fields don't create dead entities.
      */
     public static String buildBundle(String deviceId, String vin, String model, String swVersion,
-                                     String baseTopic, JSONObject snapshot) {
+                                     String baseTopic, JSONObject snapshot, boolean includeControls) {
         String node = nodeId(deviceId);
         String availabilityTopic = baseTopic + "/availability";
 
@@ -116,6 +119,16 @@ public final class HomeAssistantDiscovery {
                 cmps.put("location", tracker);
             }
 
+            // ----- control components (only when vehicle control is enabled) -----
+            if (includeControls) {
+                BydVehicleData snap = currentVehicleData();
+                for (VehicleControlCatalog.ControlEntity ent : VehicleControlCatalog.all()) {
+                    if (!ent.isAvailable(snap)) continue;
+                    JSONObject comp = ent.component(baseTopic, node);
+                    if (comp != null) cmps.put("ctl_" + ent.key, comp);
+                }
+            }
+
             bundle.put("cmps", cmps);
         } catch (Exception ignored) {}
         return bundle.toString();
@@ -137,6 +150,15 @@ public final class HomeAssistantDiscovery {
             c.put("payload_off", "0");
         }
         return c;
+    }
+
+    private static BydVehicleData currentVehicleData() {
+        try {
+            BydDataCollector c = BydDataCollector.getInstance();
+            return c.isInitialized() ? c.getData() : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static String deviceName(String model, String vin) {

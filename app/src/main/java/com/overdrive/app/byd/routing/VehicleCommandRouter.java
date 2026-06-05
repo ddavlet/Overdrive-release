@@ -362,6 +362,64 @@ public final class VehicleCommandRouter {
         public boolean executeViaSdk(BydDataCollector c) { return c.closeTailgate(); }
     }
 
+    /**
+     * Local-only tailgate open. The cloud composite {@link TrunkOpenCommand} unlocks
+     * via cloud first to avoid the alarm; this SDK-only variant fires the motor
+     * directly for the MQTT/HA path (which never touches cloud). The body controller
+     * still gates on vehicle state, and HA users gate it on "doors unlocked".
+     */
+    public static final class TrunkOpenSdkCommand extends VehicleCommand {
+        public String name() { return "trunk-open-sdk"; }
+        public Capability sdkCapability() { return Capability.REQUIRED; }
+        public RoutePreference defaultPreference() { return RoutePreference.SDK_ONLY; }
+        public boolean executeViaSdk(BydDataCollector c) { return c.openTailgate(); }
+    }
+
+    // ── Tier 2: local body comfort (reuse verified SDK setters) ─────────
+
+    /** Sunroof open/close/stop — BYDAutoBodyworkDevice.voiceCtlMoonRoof (area 5). */
+    public static final class SunroofCommand extends VehicleCommand {
+        public final int command; // 1=open, 2=close, 3=stop
+        public SunroofCommand(int c) { this.command = c; }
+        public String name() { return "sunroof"; }
+        public Capability sdkCapability() { return Capability.REQUIRED; }
+        public RoutePreference defaultPreference() { return RoutePreference.SDK_ONLY; }
+        public boolean executeViaSdk(BydDataCollector c) { return c.setSunWindowCommand(5, command); }
+    }
+
+    /** Sunshade open/close/stop — BYDAutoBodyworkDevice.voiceCtlSunshadePanel (area 6). */
+    public static final class SunshadeCommand extends VehicleCommand {
+        public final int command;
+        public SunshadeCommand(int c) { this.command = c; }
+        public String name() { return "sunshade"; }
+        public Capability sdkCapability() { return Capability.REQUIRED; }
+        public RoutePreference defaultPreference() { return RoutePreference.SDK_ONLY; }
+        public boolean executeViaSdk(BydDataCollector c) { return c.setSunWindowCommand(6, command); }
+    }
+
+    /** Rear-door child lock (both sides) — BYDAutoDoorLockDevice feature write. */
+    public static final class ChildLockCommand extends VehicleCommand {
+        public final boolean enabled;
+        public ChildLockCommand(boolean e) { this.enabled = e; }
+        public String name() { return "child-lock"; }
+        public Capability sdkCapability() { return Capability.REQUIRED; }
+        public RoutePreference defaultPreference() { return RoutePreference.SDK_ONLY; }
+        public boolean executeViaSdk(BydDataCollector c) {
+            // non-short-circuit so both sides are attempted
+            return c.setChildLock(true, enabled) & c.setChildLock(false, enabled);
+        }
+    }
+
+    /** Phone wireless-charger pad on/off — BYDAutoChargingDevice feature write. */
+    public static final class WirelessChargingCommand extends VehicleCommand {
+        public final boolean enabled;
+        public WirelessChargingCommand(boolean e) { this.enabled = e; }
+        public String name() { return "wireless-charging"; }
+        public Capability sdkCapability() { return Capability.REQUIRED; }
+        public RoutePreference defaultPreference() { return RoutePreference.SDK_ONLY; }
+        public boolean executeViaSdk(BydDataCollector c) { return c.setWirelessCharging(enabled); }
+    }
+
     public static final class TrunkStopCommand extends VehicleCommand {
         public String name() { return "trunk-stop"; }
         public Capability sdkCapability() { return Capability.REQUIRED; }
@@ -545,6 +603,22 @@ public final class VehicleCommandRouter {
         }
     }
 
+    /**
+     * Local CAN-backed in-car setting write via the BYD carsettings provider
+     * ({@link com.overdrive.app.byd.BydCarSettings}). SDK/local-only — never cloud.
+     * Only allowlisted keys with in-domain values are accepted (validated downstream).
+     */
+    public static final class CarSettingCommand extends VehicleCommand {
+        public final String key; public final int value;
+        public CarSettingCommand(String key, int value) { this.key = key; this.value = value; }
+        public String name() { return "car-setting:" + key; }
+        public Capability sdkCapability() { return Capability.REQUIRED; }
+        public RoutePreference defaultPreference() { return RoutePreference.SDK_ONLY; }
+        public boolean executeViaSdk(BydDataCollector c) {
+            return com.overdrive.app.byd.BydCarSettings.getInstance().writeInt(key, value);
+        }
+    }
+
     // ── Routing ─────────────────────────────────────────────────────────
 
     public CommandResult execute(VehicleCommand cmd) {
@@ -643,6 +717,21 @@ public final class VehicleCommandRouter {
         long elapsed = System.currentTimeMillis() - start;
         if (leg.success) return CommandResult.success(Path.SDK, msg("local_sent"), elapsed);
         return CommandResult.failed(Path.SDK, msg("not_supported"), elapsed, leg.error);
+    }
+
+    /**
+     * Local-only dispatch for the MQTT / Home Assistant control path.
+     *
+     * <p>Runs <b>only</b> the SDK leg — it never touches the cloud leg, the cloud
+     * handshake, the control PIN, or VIN lookup, and never constructs a cloud
+     * client. This is the structural guarantee behind "MQTT control is fully
+     * local with zero BYD-cloud dependency": even a command that declares a cloud
+     * capability will only have its {@link VehicleCommand#executeViaSdk} leg run
+     * here. Commands with no SDK path return {@code NOT_SUPPORTED} (the control
+     * catalog should not have offered them in the first place).
+     */
+    public CommandResult executeSdkOnly(VehicleCommand cmd) {
+        return runSdkOnly(cmd);
     }
 
     private CommandResult runCloudOnly(VehicleCommand cmd) {

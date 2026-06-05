@@ -1165,7 +1165,10 @@
     "ha_discovery": "Home Assistant discovery",
     "ha_discovery_desc": "Auto-create entities in Home Assistant. Publishes per-field retained topics (no aggregate JSON).",
     "ha_prefix": "Discovery prefix",
-    "ha_short": "Home Assistant"
+    "ha_short": "Home Assistant",
+    "allow_control": "Allow vehicle control",
+    "allow_control_desc": "Expose controllable entities (climate, windows, seats, settings…) and act on commands from Home Assistant. Local SDK only — never the BYD cloud. Off by default.",
+    "control_short": "control"
   },
   "abrp": {
     "connected": "Connected",

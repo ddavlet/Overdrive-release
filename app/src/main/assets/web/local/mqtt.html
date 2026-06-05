@@ -269,6 +269,16 @@
                                 <label data-i18n="mqtt.ha_prefix">Discovery prefix</label>
                                 <input type="text" id="formDiscoveryPrefix" value="homeassistant" placeholder="homeassistant">
                             </div>
+                            <div id="formAllowControlRow" style="display:none;align-items:center;justify-content:space-between;">
+                                <div>
+                                    <div style="font-size:14px;color:var(--text-primary);font-weight:500;" data-i18n="mqtt.allow_control">Allow vehicle control</div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;" data-i18n="mqtt.allow_control_desc">Expose controllable entities (climate, windows, seats, settings…) and act on commands from Home Assistant. Local SDK only — never the BYD cloud. Off by default.</div>
+                                </div>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="formAllowControl">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
                             <div style="display:flex;align-items:center;justify-content:space-between;">
                                 <div>
                                     <div style="font-size:14px;color:var(--text-primary);font-weight:500;" data-i18n="mqtt.retain">Retain Messages</div>

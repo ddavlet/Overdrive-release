@@ -797,11 +797,32 @@ public class MqttConnectionManager {
             logger.error("Telemetry collection error: " + e.getMessage());
         }
 
+        // Tier 3: append curated CAN-backed car settings (setting_<key>) for HA read-back,
+        // but only when some enabled connection actually exposes vehicle control — otherwise
+        // we'd hit the carsettings provider for no consumer.
+        if (anyControlEnabled()) {
+            try {
+                com.overdrive.app.byd.BydCarSettings.getInstance().snapshotInto(payload);
+            } catch (Exception e) {
+                logger.debug("Car settings snapshot failed: " + e.getMessage());
+            }
+        }
+
         // Update the cache
         lastCachedTelemetry = payload;
         lastCollectionTimeMs = now;
 
         return payload;
+    }
+
+    /** True if any enabled connection has vehicle control turned on. */
+    private boolean anyControlEnabled() {
+        try {
+            for (MqttConnectionConfig cfg : store.getEnabled()) {
+                if (cfg.isControlEnabled()) return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     // ==================== GETTERS ====================

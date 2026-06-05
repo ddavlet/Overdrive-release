@@ -57,6 +57,7 @@ public class MqttPublisherService implements MqttCallback {
     // Change detection (report-by-exception) + Home Assistant discovery state
     private final TelemetryDiffer differ = new TelemetryDiffer();
     private volatile boolean discoveryAnnounced = false;
+    private volatile MqttCommandRouter commandRouter;
     private volatile String haVin = null;
     private volatile String haModel = null;
     private volatile String haSwVersion = null;
@@ -201,6 +202,17 @@ public class MqttPublisherService implements MqttCallback {
                 } catch (MqttException e) {
                     logger.warn("HA status subscribe failed: " + e.getMessage());
                 }
+                // Vehicle control (local SDK only): subscribe to inbound command topics
+                // <base>/<key>/set and <base>/<key>/<sub>/set (composite climate/cover).
+                if (config.isControlEnabled()) {
+                    try {
+                        client.subscribe(config.topic + "/+/set", config.qos);
+                        client.subscribe(config.topic + "/+/+/set", config.qos);
+                        logger.info("Subscribed to vehicle-control command topics under " + config.topic);
+                    } catch (MqttException e) {
+                        logger.warn("Control command subscribe failed: " + e.getMessage());
+                    }
+                }
             }
 
             logger.info("Connected to " + brokerUri);
@@ -248,6 +260,11 @@ public class MqttPublisherService implements MqttCallback {
     public synchronized void disconnect() {
         running = false;
         connected = false;
+
+        if (commandRouter != null) {
+            commandRouter.shutdown();
+            commandRouter = null;
+        }
 
         if (client != null) {
             try {
@@ -325,7 +342,7 @@ public class MqttPublisherService implements MqttCallback {
 
             boolean ok = true;
             for (String k : keys) {
-                if (!TelemetryFieldCatalog.isDiscoverable(k)) continue;
+                if (!TelemetryFieldCatalog.isPublishable(k)) continue;
                 Object v = snapshot.opt(k);
                 if (v == null || v == JSONObject.NULL || v instanceof JSONArray) continue;
                 if (!publishString(HomeAssistantDiscovery.stateTopic(config.topic, k),
@@ -400,7 +417,7 @@ public class MqttPublisherService implements MqttCallback {
         Iterator<String> it = snap.keys();
         while (it.hasNext()) {
             String k = it.next();
-            if (!TelemetryFieldCatalog.isDiscoverable(k)) continue;
+            if (!TelemetryFieldCatalog.isPublishable(k)) continue;
             Object v = snap.opt(k);
             if (v == null || v == JSONObject.NULL || v instanceof JSONArray) continue;
             keys.add(k);
@@ -422,7 +439,7 @@ public class MqttPublisherService implements MqttCallback {
         try {
             String topic = HomeAssistantDiscovery.deviceConfigTopic(config.discoveryPrefix, deviceId);
             String bundle = HomeAssistantDiscovery.buildBundle(deviceId, haVin, haModel, haSwVersion,
-                    config.topic, snapshot);
+                    config.topic, snapshot, config.isControlEnabled());
             if (publishString(topic, bundle, true, 1)) {
                 discoveryAnnounced = true;
                 logger.info("Published HA discovery bundle to " + topic);
@@ -473,6 +490,27 @@ public class MqttPublisherService implements MqttCallback {
                 discoveryAnnounced = false;
                 differ.reset();
             }
+            return;
+        }
+
+        // Inbound vehicle-control command: <base>/<key>/set or <base>/<key>/<sub>/set.
+        if (config.isControlEnabled() && topic != null
+                && topic.startsWith(config.topic + "/") && topic.endsWith("/set")) {
+            String inner = topic.substring(config.topic.length() + 1, topic.length() - "/set".length());
+            String key, sub;
+            int slash = inner.indexOf('/');
+            if (slash >= 0) { key = inner.substring(0, slash); sub = inner.substring(slash + 1); }
+            else { key = inner; sub = null; }
+            String payload = new String(message.getPayload());
+            ensureCommandRouter();
+            commandRouter.handle(key, sub, payload);
+        }
+    }
+
+    private synchronized void ensureCommandRouter() {
+        if (commandRouter == null) {
+            commandRouter = new MqttCommandRouter(config.id,
+                    (k, v) -> publishString(config.topic + "/" + k, v, true, config.qos));
         }
     }
 

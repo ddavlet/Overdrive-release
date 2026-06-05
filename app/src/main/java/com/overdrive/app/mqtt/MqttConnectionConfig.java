@@ -39,6 +39,10 @@ public class MqttConnectionConfig {
     public boolean homeAssistantDiscovery; // If true: device-bundle discovery + per-field retained topics
     public String discoveryPrefix;         // HA discovery prefix (default "homeassistant")
 
+    // Vehicle control (local SDK/HAL only — never the BYD cloud). When true, HA control
+    // entities are discovered and inbound command topics (<base>/<key>/set) are honored.
+    public boolean allowControl;           // Master safety toggle (default off)
+
     // Defaults
     private static final int DEFAULT_PORT = 1883;
     private static final int DEFAULT_QOS = 0;
@@ -51,6 +55,7 @@ public class MqttConnectionConfig {
     private static final boolean DEFAULT_CHANGE_ONLY = true;
     private static final boolean DEFAULT_HA_DISCOVERY = false;
     private static final String DEFAULT_DISCOVERY_PREFIX = "homeassistant";
+    private static final boolean DEFAULT_ALLOW_CONTROL = false;
 
     /**
      * Create a new connection config with defaults.
@@ -75,6 +80,12 @@ public class MqttConnectionConfig {
         this.changeOnly = DEFAULT_CHANGE_ONLY;
         this.homeAssistantDiscovery = DEFAULT_HA_DISCOVERY;
         this.discoveryPrefix = DEFAULT_DISCOVERY_PREFIX;
+        this.allowControl = DEFAULT_ALLOW_CONTROL;
+    }
+
+    /** True when this connection should accept inbound control commands and discover control entities. */
+    public boolean isControlEnabled() {
+        return allowControl && homeAssistantDiscovery;
     }
 
     /** True when this connection should publish HA discovery + per-field retained topics. */
@@ -183,6 +194,7 @@ public class MqttConnectionConfig {
             json.put("changeOnly", changeOnly);
             json.put("homeAssistantDiscovery", homeAssistantDiscovery);
             json.put("discoveryPrefix", discoveryPrefix);
+            json.put("allowControl", allowControl);
         } catch (Exception ignored) {}
         return json;
     }
@@ -225,6 +237,7 @@ public class MqttConnectionConfig {
         config.changeOnly = json.optBoolean("changeOnly", DEFAULT_CHANGE_ONLY);
         config.homeAssistantDiscovery = json.optBoolean("homeAssistantDiscovery", DEFAULT_HA_DISCOVERY);
         config.discoveryPrefix = json.optString("discoveryPrefix", DEFAULT_DISCOVERY_PREFIX);
+        config.allowControl = json.optBoolean("allowControl", DEFAULT_ALLOW_CONTROL);
         if (config.minIntervalSeconds < 1) config.minIntervalSeconds = 1;
         if (config.maxIntervalSeconds < config.minIntervalSeconds) {
             config.maxIntervalSeconds = config.minIntervalSeconds;
