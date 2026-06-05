@@ -10,7 +10,12 @@ import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
+import org.json.JSONArray;
 import org.json.JSONObject;
+
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Set;
 
 /**
  * MQTT publisher for a single broker connection.
@@ -48,6 +53,13 @@ public class MqttPublisherService implements MqttCallback {
     private volatile long lastPublishTime = 0;
     private volatile int consecutiveFailures = 0;
     private volatile String lastError = null;
+
+    // Change detection (report-by-exception) + Home Assistant discovery state
+    private final TelemetryDiffer differ = new TelemetryDiffer();
+    private volatile boolean discoveryAnnounced = false;
+    private volatile String haVin = null;
+    private volatile String haModel = null;
+    private volatile String haSwVersion = null;
 
     public MqttPublisherService(MqttConnectionConfig config, String deviceId) {
         this.config = config;
@@ -180,6 +192,17 @@ public class MqttPublisherService implements MqttCallback {
                 logger.warn("Failed to publish availability online: " + e.getMessage());
             }
 
+            // Home Assistant: re-announce discovery after every (re)connect, and listen for
+            // HA's birth message so we re-announce + resend state when HA restarts.
+            if (config.isHomeAssistant()) {
+                discoveryAnnounced = false;
+                try {
+                    client.subscribe(HomeAssistantDiscovery.statusTopic(config.discoveryPrefix), 0);
+                } catch (MqttException e) {
+                    logger.warn("HA status subscribe failed: " + e.getMessage());
+                }
+            }
+
             logger.info("Connected to " + brokerUri);
             return true;
 
@@ -255,47 +278,175 @@ public class MqttPublisherService implements MqttCallback {
         logger.info("Disconnected from " + config.name + " (" + config.getBrokerUri() + ")");
     }
 
+    /** Latest vehicle identity used to build the HA discovery device block. */
+    public void setHaMeta(String vin, String model, String swVersion) {
+        this.haVin = vin;
+        this.haModel = model;
+        this.haSwVersion = swVersion;
+    }
+
     /**
-     * Publish a telemetry JSON payload to the configured topic.
-     * Attempts reconnection if not connected.
+     * Publish a telemetry snapshot, applying change detection and the min/max
+     * interval window. Behaviour depends on the connection mode:
      *
-     * @return true if published successfully
+     *  - Home Assistant mode: per-field retained topics (only changed fields, or
+     *    everything on heartbeat/first), plus a one-time device-bundle discovery
+     *    announce. No aggregate JSON.
+     *  - Aggregate mode: the full JSON blob to the configured topic, but only when
+     *    a backing value changed (or on heartbeat) — retain stays valid because we
+     *    always send a complete snapshot.
+     *
+     * @return true if nothing went wrong (a deliberate skip also returns true)
+     */
+    public synchronized boolean publishTelemetry(JSONObject snapshot) {
+        if (!running) return false;
+
+        long now = System.currentTimeMillis();
+        long minMs = Math.max(1, config.minIntervalSeconds) * 1000L;
+        long maxMs = Math.max(config.minIntervalSeconds, config.maxIntervalSeconds) * 1000L;
+
+        Set<String> changed = differ.changedKeys(snapshot);
+        boolean first = differ.lastSendTimeMs() == 0;
+        boolean heartbeat = differ.elapsedMs(now) >= maxMs;
+
+        // Rate-limit floor: never transmit more often than the min interval,
+        // unless this is the very first publish or the heartbeat is due.
+        if (!first && !heartbeat && differ.elapsedMs(now) < minMs) {
+            return true;
+        }
+
+        if (config.isHomeAssistant()) {
+            if (!ensureConnected()) return false;
+            if (!discoveryAnnounced) announceDiscovery(snapshot);
+
+            boolean sendAll = first || heartbeat || !config.changeOnly;
+            Set<String> keys = sendAll ? discoverableKeys(snapshot) : changed;
+            if (!sendAll && keys.isEmpty()) return true;
+
+            boolean ok = true;
+            for (String k : keys) {
+                if (!TelemetryFieldCatalog.isDiscoverable(k)) continue;
+                Object v = snapshot.opt(k);
+                if (v == null || v == JSONObject.NULL || v instanceof JSONArray) continue;
+                if (!publishString(HomeAssistantDiscovery.stateTopic(config.topic, k),
+                        String.valueOf(v), true, config.qos)) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok && snapshot.has("lat") && snapshot.has("lon")
+                    && (sendAll || changed.contains("lat") || changed.contains("lon"))) {
+                publishLocation(snapshot);
+            }
+            if (ok) differ.markKeysSent(snapshot, keys, now);
+            return ok;
+        }
+
+        // Aggregate mode — full snapshot, change-gated.
+        boolean shouldSend = differ.shouldPublish(!changed.isEmpty(), config.changeOnly, now, minMs, maxMs);
+        if (!shouldSend) return true;
+        if (!publishString(config.topic, snapshot.toString(), config.retainMessages, config.qos)) {
+            return false;
+        }
+        differ.markAllSent(snapshot, now);
+        return true;
+    }
+
+    /**
+     * Publish a JSON payload to the configured topic (backward-compatible helper —
+     * no change gating). Prefer {@link #publishTelemetry(JSONObject)}.
      */
     public synchronized boolean publish(JSONObject payload) {
         if (!running) return false;
+        return publishString(config.topic, payload.toString(), config.retainMessages, config.qos);
+    }
 
-        // Reconnect if needed
-        if (!connected || client == null || !client.isConnected()) {
-            if (!connect()) {
-                failedPublishes++;
-                return false;
-            }
+    /** Low-level single-message publish with reconnect + stats handling. */
+    private boolean publishString(String topic, String payload, boolean retain, int qos) {
+        if (!ensureConnected()) {
+            failedPublishes++;
+            return false;
         }
-
         try {
-            String json = payload.toString();
-            MqttMessage message = new MqttMessage(json.getBytes());
-            message.setQos(config.qos);
-            message.setRetained(config.retainMessages);
-
-            client.publish(config.topic, message);
+            MqttMessage message = new MqttMessage(payload.getBytes());
+            message.setQos(qos);
+            message.setRetained(retain);
+            client.publish(topic, message);
 
             totalPublishes++;
             lastPublishTime = System.currentTimeMillis();
             consecutiveFailures = 0;
             lastError = null;
             return true;
-
         } catch (MqttException e) {
             failedPublishes++;
             consecutiveFailures++;
             lastError = "Publish failed: " + e.getMessage();
             logger.warn(lastError);
-
-            // Mark disconnected so next publish triggers reconnect
             connected = false;
             ProxyHelper.invalidateCache();
             return false;
+        }
+    }
+
+    private boolean ensureConnected() {
+        if (!running) return false;
+        if (connected && client != null && client.isConnected()) return true;
+        return connect();
+    }
+
+    private Set<String> discoverableKeys(JSONObject snap) {
+        Set<String> keys = new HashSet<>();
+        Iterator<String> it = snap.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (!TelemetryFieldCatalog.isDiscoverable(k)) continue;
+            Object v = snap.opt(k);
+            if (v == null || v == JSONObject.NULL || v instanceof JSONArray) continue;
+            keys.add(k);
+        }
+        return keys;
+    }
+
+    private void publishLocation(JSONObject snap) {
+        try {
+            JSONObject loc = new JSONObject();
+            loc.put("latitude", snap.optDouble("lat"));
+            loc.put("longitude", snap.optDouble("lon"));
+            publishString(HomeAssistantDiscovery.locationTopic(config.topic), loc.toString(), true, config.qos);
+        } catch (Exception ignored) {}
+    }
+
+    /** Publish the retained device-bundle discovery config (HA mode). */
+    private void announceDiscovery(JSONObject snapshot) {
+        try {
+            String topic = HomeAssistantDiscovery.deviceConfigTopic(config.discoveryPrefix, deviceId);
+            String bundle = HomeAssistantDiscovery.buildBundle(deviceId, haVin, haModel, haSwVersion,
+                    config.topic, snapshot);
+            if (publishString(topic, bundle, true, 1)) {
+                discoveryAnnounced = true;
+                logger.info("Published HA discovery bundle to " + topic);
+            }
+        } catch (Exception e) {
+            logger.warn("HA discovery announce failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Remove the HA device (empty retained payload) so toggling discovery off or
+     * deleting a connection doesn't orphan entities. Best-effort; needs a live client.
+     */
+    public synchronized void removeDiscovery(String discoveryPrefix) {
+        if (client == null || !client.isConnected()) return;
+        try {
+            String topic = HomeAssistantDiscovery.deviceConfigTopic(discoveryPrefix, deviceId);
+            MqttMessage message = new MqttMessage(new byte[0]);
+            message.setRetained(true);
+            message.setQos(1);
+            client.publish(topic, message);
+            logger.info("Removed HA discovery at " + topic);
+        } catch (MqttException e) {
+            logger.warn("HA discovery remove failed: " + e.getMessage());
         }
     }
 
@@ -311,7 +462,18 @@ public class MqttPublisherService implements MqttCallback {
 
     @Override
     public void messageArrived(String topic, MqttMessage message) {
-        // We don't subscribe to anything — publish only
+        // The only thing we subscribe to is HA's birth/status topic. When HA comes
+        // back online, re-announce discovery and force a full state resend so its
+        // entities repopulate immediately instead of waiting for the next change.
+        if (config.isHomeAssistant() && topic != null
+                && topic.equals(HomeAssistantDiscovery.statusTopic(config.discoveryPrefix))) {
+            String payload = new String(message.getPayload()).trim();
+            if ("online".equalsIgnoreCase(payload)) {
+                logger.info("Home Assistant birth received — re-announcing discovery");
+                discoveryAnnounced = false;
+                differ.reset();
+            }
+        }
     }
 
     @Override

@@ -233,9 +233,13 @@
                                     <option value="1" data-i18n="mqtt.qos_1">1 - At Least Once</option>
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label data-i18n="mqtt.field_interval">Publish Interval (seconds)</label>
-                                <input type="number" id="formInterval" value="5" min="1" max="300">
+                            <div class="form-group" style="grid-column: span 2;">
+                                <label><span data-i18n="mqtt.field_min_interval">Min interval — fastest</span>: <span id="formMinLabel" style="font-family:'JetBrains Mono',monospace;color:var(--text-primary);">5s</span></label>
+                                <input type="range" id="formMinInterval" min="1" max="60" step="1" value="5" oninput="MQTT.onSlider()">
+                            </div>
+                            <div class="form-group" style="grid-column: span 2;">
+                                <label><span data-i18n="mqtt.field_max_interval">Max interval — heartbeat</span>: <span id="formMaxLabel" style="font-family:'JetBrains Mono',monospace;color:var(--text-primary);">5m</span></label>
+                                <input type="range" id="formMaxInterval" min="30" max="3600" step="30" value="300" oninput="MQTT.onSlider()">
                             </div>
                         </div>
 
@@ -243,13 +247,27 @@
                         <div style="display:flex;flex-direction:column;gap:12px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border-subtle);">
                             <div style="display:flex;align-items:center;justify-content:space-between;">
                                 <div>
-                                    <div style="font-size:14px;color:var(--text-primary);font-weight:500;" data-i18n="mqtt.adaptive_interval">Adaptive Interval</div>
-                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;" data-i18n="mqtt.adaptive_desc">Publish slower when vehicle is parked</div>
+                                    <div style="font-size:14px;color:var(--text-primary);font-weight:500;" data-i18n="mqtt.change_only">Publish only on change</div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;" data-i18n="mqtt.change_only_desc">Skip publishing when no values changed (heartbeat still fires at the max interval)</div>
                                 </div>
                                 <label class="toggle-switch">
-                                    <input type="checkbox" id="formAdaptive" checked>
+                                    <input type="checkbox" id="formChangeOnly" checked>
                                     <span class="toggle-slider"></span>
                                 </label>
+                            </div>
+                            <div style="display:flex;align-items:center;justify-content:space-between;">
+                                <div>
+                                    <div style="font-size:14px;color:var(--text-primary);font-weight:500;" data-i18n="mqtt.ha_discovery">Home Assistant discovery</div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;" data-i18n="mqtt.ha_discovery_desc">Auto-create entities in Home Assistant. Publishes per-field retained topics (no aggregate JSON).</div>
+                                </div>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="formHaDiscovery" onchange="MQTT.onHaToggle()">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="form-group" id="formDiscoveryPrefixRow" style="display:none;">
+                                <label data-i18n="mqtt.ha_prefix">Discovery prefix</label>
+                                <input type="text" id="formDiscoveryPrefix" value="homeassistant" placeholder="homeassistant">
                             </div>
                             <div style="display:flex;align-items:center;justify-content:space-between;">
                                 <div>

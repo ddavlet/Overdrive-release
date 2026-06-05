@@ -25,10 +25,19 @@ public class MqttConnectionConfig {
     public String password;              // Optional MQTT auth
     public int qos;                      // 0 = fire-and-forget, 1 = at-least-once
     public boolean enabled;              // Per-connection toggle
-    public int publishIntervalSeconds;   // How often to publish (default: 5)
-    public boolean adaptiveInterval;     // If true, slow down when parked (like ABRP)
-    public boolean retainMessages;       // MQTT retain flag on published messages
+    public int publishIntervalSeconds;   // Deprecated — kept for migration (seeds minIntervalSeconds)
+    public boolean adaptiveInterval;     // Deprecated — superseded by the min/max window
+    public boolean retainMessages;       // MQTT retain flag on published messages (aggregate mode)
     public boolean trustAllCerts;        // If true, accept self-signed/untrusted certs (Home Assistant)
+
+    // Report-by-exception window (the two sliders)
+    public int minIntervalSeconds;       // Floor: never publish more often than this
+    public int maxIntervalSeconds;       // Heartbeat ceiling: always publish at least this often
+    public boolean changeOnly;           // If true, only publish when a backing value changed
+
+    // Home Assistant discovery
+    public boolean homeAssistantDiscovery; // If true: device-bundle discovery + per-field retained topics
+    public String discoveryPrefix;         // HA discovery prefix (default "homeassistant")
 
     // Defaults
     private static final int DEFAULT_PORT = 1883;
@@ -37,6 +46,11 @@ public class MqttConnectionConfig {
     private static final boolean DEFAULT_ADAPTIVE = true;
     private static final boolean DEFAULT_RETAIN = false;
     private static final boolean DEFAULT_TRUST_ALL_CERTS = false;
+    private static final int DEFAULT_MIN_INTERVAL = 5;
+    private static final int DEFAULT_MAX_INTERVAL = 300;
+    private static final boolean DEFAULT_CHANGE_ONLY = true;
+    private static final boolean DEFAULT_HA_DISCOVERY = false;
+    private static final String DEFAULT_DISCOVERY_PREFIX = "homeassistant";
 
     /**
      * Create a new connection config with defaults.
@@ -56,6 +70,16 @@ public class MqttConnectionConfig {
         this.adaptiveInterval = DEFAULT_ADAPTIVE;
         this.retainMessages = DEFAULT_RETAIN;
         this.trustAllCerts = DEFAULT_TRUST_ALL_CERTS;
+        this.minIntervalSeconds = DEFAULT_MIN_INTERVAL;
+        this.maxIntervalSeconds = DEFAULT_MAX_INTERVAL;
+        this.changeOnly = DEFAULT_CHANGE_ONLY;
+        this.homeAssistantDiscovery = DEFAULT_HA_DISCOVERY;
+        this.discoveryPrefix = DEFAULT_DISCOVERY_PREFIX;
+    }
+
+    /** True when this connection should publish HA discovery + per-field retained topics. */
+    public boolean isHomeAssistant() {
+        return homeAssistantDiscovery;
     }
 
     /**
@@ -154,6 +178,11 @@ public class MqttConnectionConfig {
             json.put("adaptiveInterval", adaptiveInterval);
             json.put("retainMessages", retainMessages);
             json.put("trustAllCerts", trustAllCerts);
+            json.put("minIntervalSeconds", minIntervalSeconds);
+            json.put("maxIntervalSeconds", maxIntervalSeconds);
+            json.put("changeOnly", changeOnly);
+            json.put("homeAssistantDiscovery", homeAssistantDiscovery);
+            json.put("discoveryPrefix", discoveryPrefix);
         } catch (Exception ignored) {}
         return json;
     }
@@ -189,6 +218,17 @@ public class MqttConnectionConfig {
         config.adaptiveInterval = json.optBoolean("adaptiveInterval", DEFAULT_ADAPTIVE);
         config.retainMessages = json.optBoolean("retainMessages", DEFAULT_RETAIN);
         config.trustAllCerts = json.optBoolean("trustAllCerts", DEFAULT_TRUST_ALL_CERTS);
+        // Migrate the old single interval into the new floor if the new fields aren't set yet.
+        config.minIntervalSeconds = json.optInt("minIntervalSeconds",
+                json.optInt("publishIntervalSeconds", DEFAULT_MIN_INTERVAL));
+        config.maxIntervalSeconds = json.optInt("maxIntervalSeconds", DEFAULT_MAX_INTERVAL);
+        config.changeOnly = json.optBoolean("changeOnly", DEFAULT_CHANGE_ONLY);
+        config.homeAssistantDiscovery = json.optBoolean("homeAssistantDiscovery", DEFAULT_HA_DISCOVERY);
+        config.discoveryPrefix = json.optString("discoveryPrefix", DEFAULT_DISCOVERY_PREFIX);
+        if (config.minIntervalSeconds < 1) config.minIntervalSeconds = 1;
+        if (config.maxIntervalSeconds < config.minIntervalSeconds) {
+            config.maxIntervalSeconds = config.minIntervalSeconds;
+        }
         return config;
     }
 
@@ -200,8 +240,9 @@ public class MqttConnectionConfig {
                 ", broker='" + brokerUrl + ":" + port + '\'' +
                 ", topic='" + topic + '\'' +
                 ", enabled=" + enabled +
-                ", interval=" + publishIntervalSeconds + "s" +
-                ", adaptive=" + adaptiveInterval +
+                ", interval=[" + minIntervalSeconds + "-" + maxIntervalSeconds + "]s" +
+                ", changeOnly=" + changeOnly +
+                ", ha=" + homeAssistantDiscovery +
                 ", ssl=" + isSsl() +
                 ", trustAllCerts=" + trustAllCerts +
                 '}';

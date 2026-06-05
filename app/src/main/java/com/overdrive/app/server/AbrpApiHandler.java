@@ -73,6 +73,14 @@ public class AbrpApiHandler {
             if (bodyJson.has("car_model")) {
                 extraFields.put("car_model", bodyJson.getString("car_model"));
             }
+            // Data-saving + app-gate options
+            if (bodyJson.has("change_only")) extraFields.put("change_only", bodyJson.getBoolean("change_only"));
+            if (bodyJson.has("min_interval_seconds")) extraFields.put("min_interval_seconds", bodyJson.getInt("min_interval_seconds"));
+            if (bodyJson.has("max_interval_seconds")) extraFields.put("max_interval_seconds", bodyJson.getInt("max_interval_seconds"));
+            if (bodyJson.has("gate_on_app")) extraFields.put("gate_on_app", bodyJson.getBoolean("gate_on_app"));
+            if (bodyJson.has("app_package")) extraFields.put("app_package", bodyJson.getString("app_package"));
+            if (bodyJson.has("app_active_mode")) extraFields.put("app_active_mode", bodyJson.getString("app_active_mode"));
+            if (bodyJson.has("app_grace_seconds")) extraFields.put("app_grace_seconds", bodyJson.getInt("app_grace_seconds"));
 
             JSONObject ipcResponse = sendIpcCommand("SET_ABRP_CONFIG", extraFields);
             if (ipcResponse != null) {

@@ -30,9 +30,66 @@ const ABRP = {
                 }
 
                 document.getElementById('abrpEnabled').checked = cfg.enabled || false;
+
+                // Data-saving + app-gate controls
+                var set = function (id, v) { var el = document.getElementById(id); if (el) el.value = v; };
+                var chk = function (id, v) { var el = document.getElementById(id); if (el) el.checked = v; };
+                chk('abrpChangeOnly', cfg.change_only !== false);
+                set('abrpMinInterval', cfg.min_interval_seconds || 5);
+                set('abrpMaxInterval', cfg.max_interval_seconds || 120);
+                chk('abrpGateOnApp', cfg.gate_on_app || false);
+                set('abrpAppMode', cfg.app_active_mode || 'foreground');
+                set('abrpAppGrace', cfg.app_grace_seconds || 90);
+                this.onSlider();
+                this.onGateToggle();
             }
         } catch (e) {
             console.warn('[ABRP] Failed to load config:', e);
+        }
+    },
+
+    // Human-friendly interval label: 45 -> "45s", 120 -> "2m".
+    fmtInterval(sec) {
+        sec = parseInt(sec) || 0;
+        if (sec < 60) return sec + 's';
+        return (sec % 60 === 0) ? (sec / 60) + 'm' : (sec / 60).toFixed(1) + 'm';
+    },
+
+    onSlider() {
+        var pairs = [['abrpMinInterval', 'abrpMinLabel'], ['abrpMaxInterval', 'abrpMaxLabel'], ['abrpAppGrace', 'abrpGraceLabel']];
+        for (var i = 0; i < pairs.length; i++) {
+            var inp = document.getElementById(pairs[i][0]);
+            var lab = document.getElementById(pairs[i][1]);
+            if (inp && lab) lab.textContent = this.fmtInterval(inp.value);
+        }
+    },
+
+    onGateToggle() {
+        var gate = document.getElementById('abrpGateOnApp');
+        var opts = document.getElementById('abrpGateOptions');
+        if (gate && opts) opts.style.display = gate.checked ? '' : 'none';
+    },
+
+    async saveDataSaving() {
+        var data = {
+            change_only: document.getElementById('abrpChangeOnly').checked,
+            min_interval_seconds: parseInt(document.getElementById('abrpMinInterval').value) || 5,
+            max_interval_seconds: parseInt(document.getElementById('abrpMaxInterval').value) || 120,
+            gate_on_app: document.getElementById('abrpGateOnApp').checked,
+            app_active_mode: document.getElementById('abrpAppMode').value,
+            app_grace_seconds: parseInt(document.getElementById('abrpAppGrace').value) || 90
+        };
+        if (data.max_interval_seconds < data.min_interval_seconds) {
+            data.max_interval_seconds = data.min_interval_seconds;
+        }
+        try {
+            await fetch('/api/abrp/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+        } catch (e) {
+            console.warn('[ABRP] Failed to save data-saving settings:', e);
         }
     },
 
@@ -66,6 +123,16 @@ const ABRP = {
                 const countEl = document.getElementById('uploadCount');
                 if (countEl) {
                     countEl.textContent = BYD.i18n.t('abrp.upload_count', {total: s.totalUploads || 0, failed: s.failedUploads || 0});
+                }
+
+                // ABRP app presence (when the app gate is enabled)
+                const presEl = document.getElementById('abrpAppPresence');
+                if (presEl) {
+                    if (s.appGate && s.appPresence) {
+                        presEl.textContent = s.appPresence + (s.appActive ? ' ✓' : '');
+                    } else {
+                        presEl.textContent = '--';
+                    }
                 }
 
                 // Telemetry table

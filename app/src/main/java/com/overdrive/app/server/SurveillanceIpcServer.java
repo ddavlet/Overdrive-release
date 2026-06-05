@@ -1317,6 +1317,15 @@ public class SurveillanceIpcServer implements Runnable {
             abrpConfig.setEnabled(request.optBoolean("enabled", false));
         }
 
+        // Data-saving + app-gate options (applied live; the service reads config each cycle)
+        if (request.has("change_only")) abrpConfig.setChangeOnly(request.optBoolean("change_only", true));
+        if (request.has("min_interval_seconds")) abrpConfig.setMinIntervalSeconds(request.optInt("min_interval_seconds", 5));
+        if (request.has("max_interval_seconds")) abrpConfig.setMaxIntervalSeconds(request.optInt("max_interval_seconds", 120));
+        if (request.has("gate_on_app")) abrpConfig.setGateOnApp(request.optBoolean("gate_on_app", false));
+        if (request.has("app_package")) abrpConfig.setAppPackage(request.optString("app_package", "com.iternio.abrpapp"));
+        if (request.has("app_active_mode")) abrpConfig.setAppActiveMode(request.optString("app_active_mode", "foreground"));
+        if (request.has("app_grace_seconds")) abrpConfig.setAppGraceSeconds(request.optInt("app_grace_seconds", 90));
+
         abrpConfig.save();
 
         // Start or stop service if enabled state changed

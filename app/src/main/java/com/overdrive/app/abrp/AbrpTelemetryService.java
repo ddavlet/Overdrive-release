@@ -9,10 +9,12 @@ import com.overdrive.app.monitor.ChargingStateData;
 import com.overdrive.app.monitor.GearMonitor;
 import com.overdrive.app.monitor.GpsMonitor;
 import com.overdrive.app.monitor.VehicleDataMonitor;
+import com.overdrive.app.mqtt.TelemetryDiffer;
 
 import org.json.JSONObject;
 
 import java.lang.reflect.Method;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -56,6 +58,11 @@ public class AbrpTelemetryService {
     // Configuration and estimator
     private final AbrpConfig config;
     private final SohEstimator sohEstimator;
+
+    // Change detection (report-by-exception) + "only while ABRP app is in use" gate
+    private final TelemetryDiffer differ = new TelemetryDiffer();
+    private AbrpAppPresence appPresence;
+    private volatile boolean warnedAppMissing = false;
 
     // Data source references
     private final VehicleDataMonitor vehicleDataMonitor;
@@ -164,6 +171,7 @@ public class AbrpTelemetryService {
      * Device access is now handled by BydDataCollector — no per-device reflection needed here.
      */
     public void init(Context context) {
+        this.appPresence = new AbrpAppPresence(config, context);
         logger.info("ABRP telemetry service initialized (using BydDataCollector for vehicle data)");
     }
 
@@ -527,15 +535,45 @@ public class AbrpTelemetryService {
         }
 
         try {
+            long now = System.currentTimeMillis();
+
+            // Outer gate (optional): only stream while the ABRP app is actually in use.
+            if (config.isGateOnApp() && appPresence != null) {
+                if (!appPresence.isInstalled() && !warnedAppMissing) {
+                    warnedAppMissing = true;
+                    logger.warn("ABRP app gate enabled but '" + config.getAppPackage()
+                            + "' not found — streaming anyway");
+                }
+                if (!appPresence.isActive()) {
+                    logger.debug("ABRP app not active (" + appPresence.describe() + ") — skipping upload");
+                    scheduleNext(getMinInterval());
+                    return;
+                }
+            }
+
             JSONObject payload = collectTelemetry();
-            boolean success = uploadTelemetry(payload);
+
+            // Inner gate: change detection within the min/max interval window. The
+            // big saving is when parked/idle — identical payloads no longer upload.
+            long minMs = getMinInterval() * 1000L;
+            long maxMs = Math.max(getMinInterval(), getMaxInterval()) * 1000L;
+            Set<String> changed = differ.changedKeys(payload);
+            boolean shouldSend = differ.shouldPublish(!changed.isEmpty(), config.isChangeOnly(), now, minMs, maxMs);
+
+            boolean success = true;
+            if (shouldSend) {
+                success = uploadTelemetry(payload);
+                if (success) differ.markAllSent(payload, now);
+            } else {
+                logger.debug("ABRP: no change within window — skipping upload");
+            }
 
             long nextDelay;
             if (!success && consecutiveFailures > 0) {
                 nextDelay = calculateBackoff(consecutiveFailures);
                 logger.debug("Backoff: next upload in " + nextDelay + "s (failures: " + consecutiveFailures + ")");
             } else {
-                nextDelay = getAdaptiveInterval();
+                nextDelay = getMinInterval();
             }
 
             scheduleNext(nextDelay);
@@ -545,6 +583,17 @@ public class AbrpTelemetryService {
             // Schedule retry even on unexpected errors
             scheduleNext(calculateBackoff(Math.max(1, consecutiveFailures)));
         }
+    }
+
+    /** Min-interval floor (seconds), clamped to >= 1. */
+    private int getMinInterval() {
+        int v = config.getMinIntervalSeconds();
+        return v < 1 ? 1 : v;
+    }
+
+    /** Max-interval heartbeat (seconds), never below the floor. */
+    private int getMaxInterval() {
+        return Math.max(getMinInterval(), config.getMaxIntervalSeconds());
     }
 
     /**
@@ -591,6 +640,14 @@ public class AbrpTelemetryService {
             status.put("lastUploadTime", lastUploadTime);
             status.put("consecutiveFailures", consecutiveFailures);
             status.put("currentInterval", getAdaptiveInterval());
+            status.put("changeOnly", config.isChangeOnly());
+            status.put("minInterval", getMinInterval());
+            status.put("maxInterval", getMaxInterval());
+            status.put("appGate", config.isGateOnApp());
+            if (config.isGateOnApp() && appPresence != null) {
+                status.put("appPresence", appPresence.describe());
+                status.put("appActive", appPresence.isActive());
+            }
             if (lastTelemetrySnapshot != null) {
                 status.put("lastTelemetry", lastTelemetrySnapshot);
             }

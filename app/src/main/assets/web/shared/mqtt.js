@@ -155,8 +155,9 @@ const MQTT = {
                 ${lastErr ? `<div style="font-size:12px;color:var(--danger);padding:8px 0;">${this.esc(lastErr)}</div>` : ''}
                 <div style="font-size:12px;color:var(--text-muted);display:flex;gap:16px;flex-wrap:wrap;">
                     <span>${BYD.i18n.t('mqtt.label_qos')}: ${conn.qos}</span>
-                    <span>${BYD.i18n.t('mqtt.label_interval')}: ${conn.publishIntervalSeconds}s${conn.adaptiveInterval ? ' (' + BYD.i18n.t('mqtt.adaptive') + ')' : ''}</span>
+                    <span>${BYD.i18n.t('mqtt.label_interval')}: ${this.fmtInterval(conn.minIntervalSeconds || conn.publishIntervalSeconds || 5)}–${this.fmtInterval(conn.maxIntervalSeconds || 300)}${conn.changeOnly !== false ? ' (' + BYD.i18n.t('mqtt.change_short') + ')' : ''}</span>
                     <span>${BYD.i18n.t('mqtt.label_retain')}: ${conn.retainMessages ? BYD.i18n.t('common.yes') : BYD.i18n.t('common.no')}</span>
+                    ${conn.homeAssistantDiscovery ? '<span>' + BYD.i18n.t('mqtt.ha_short') + '</span>' : ''}
                     <span>${BYD.i18n.t('mqtt.label_proxy')}: ${s.proxyActive ? BYD.i18n.t('common.yes') : BYD.i18n.t('common.no')}</span>
                 </div>
             </div>
@@ -193,10 +194,15 @@ const MQTT = {
         document.getElementById('formPassword').value = '';
         document.getElementById('formClientId').value = '';
         document.getElementById('formQos').value = '0';
-        document.getElementById('formInterval').value = '5';
-        document.getElementById('formAdaptive').checked = true;
+        document.getElementById('formMinInterval').value = '5';
+        document.getElementById('formMaxInterval').value = '300';
+        document.getElementById('formChangeOnly').checked = true;
+        document.getElementById('formHaDiscovery').checked = false;
+        document.getElementById('formDiscoveryPrefix').value = 'homeassistant';
         document.getElementById('formRetain').checked = false;
         document.getElementById('formEnabled').checked = true;
+        this.onSlider();
+        this.onHaToggle();
         this._switchTab('add');
         var nameEl = document.getElementById('formName');
         if (nameEl) nameEl.focus();
@@ -218,10 +224,15 @@ const MQTT = {
         document.getElementById('formPassword').value = '';  // Don't prefill password
         document.getElementById('formClientId').value = conn.clientId || '';
         document.getElementById('formQos').value = conn.qos || 0;
-        document.getElementById('formInterval').value = conn.publishIntervalSeconds || 5;
-        document.getElementById('formAdaptive').checked = conn.adaptiveInterval !== false;
+        document.getElementById('formMinInterval').value = conn.minIntervalSeconds || conn.publishIntervalSeconds || 5;
+        document.getElementById('formMaxInterval').value = conn.maxIntervalSeconds || 300;
+        document.getElementById('formChangeOnly').checked = conn.changeOnly !== false;
+        document.getElementById('formHaDiscovery').checked = conn.homeAssistantDiscovery || false;
+        document.getElementById('formDiscoveryPrefix').value = conn.discoveryPrefix || 'homeassistant';
         document.getElementById('formRetain').checked = conn.retainMessages || false;
         document.getElementById('formEnabled').checked = conn.enabled || false;
+        this.onSlider();
+        this.onHaToggle();
         this._switchTab('add');
         var nameEl = document.getElementById('formName');
         if (nameEl) nameEl.focus();
@@ -234,6 +245,30 @@ const MQTT = {
         this._switchTab('connections');
     },
 
+    // Human-friendly interval label: 45 -> "45s", 300 -> "5m".
+    fmtInterval(sec) {
+        sec = parseInt(sec) || 0;
+        if (sec < 60) return sec + 's';
+        return (sec % 60 === 0) ? (sec / 60) + 'm' : (sec / 60).toFixed(1) + 'm';
+    },
+
+    // Live-update the min/max slider value labels.
+    onSlider() {
+        var mn = document.getElementById('formMinInterval');
+        var mx = document.getElementById('formMaxInterval');
+        var mnl = document.getElementById('formMinLabel');
+        var mxl = document.getElementById('formMaxLabel');
+        if (mn && mnl) mnl.textContent = this.fmtInterval(mn.value);
+        if (mx && mxl) mxl.textContent = this.fmtInterval(mx.value);
+    },
+
+    // Show the discovery-prefix field only when HA discovery is enabled.
+    onHaToggle() {
+        var ha = document.getElementById('formHaDiscovery');
+        var row = document.getElementById('formDiscoveryPrefixRow');
+        if (ha && row) row.style.display = ha.checked ? '' : 'none';
+    },
+
     async saveForm() {
         const data = {
             name: document.getElementById('formName').value.trim(),
@@ -244,11 +279,18 @@ const MQTT = {
             password: document.getElementById('formPassword').value,
             clientId: document.getElementById('formClientId').value.trim(),
             qos: parseInt(document.getElementById('formQos').value) || 0,
-            publishIntervalSeconds: parseInt(document.getElementById('formInterval').value) || 5,
-            adaptiveInterval: document.getElementById('formAdaptive').checked,
+            minIntervalSeconds: parseInt(document.getElementById('formMinInterval').value) || 5,
+            maxIntervalSeconds: parseInt(document.getElementById('formMaxInterval').value) || 300,
+            changeOnly: document.getElementById('formChangeOnly').checked,
+            homeAssistantDiscovery: document.getElementById('formHaDiscovery').checked,
+            discoveryPrefix: (document.getElementById('formDiscoveryPrefix').value || 'homeassistant').trim(),
             retainMessages: document.getElementById('formRetain').checked,
             enabled: document.getElementById('formEnabled').checked
         };
+        // Keep the window coherent: max must be >= min.
+        if (data.maxIntervalSeconds < data.minIntervalSeconds) {
+            data.maxIntervalSeconds = data.minIntervalSeconds;
+        }
 
         if (!data.name) { this.toast(BYD.i18n.t('mqtt.err_name_required'), 'error'); return; }
         if (!data.brokerUrl) { this.toast(BYD.i18n.t('mqtt.err_broker_required'), 'error'); return; }

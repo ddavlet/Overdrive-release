@@ -37,9 +37,6 @@ public class MqttConnectionManager {
     private static final String TAG = "MqttConnectionManager";
     private static final DaemonLogger logger = DaemonLogger.getInstance(TAG);
 
-    // Adaptive interval constants (same as ABRP)
-    private static final int PARKED_MULTIPLIER = 6; // e.g., 5s driving → 30s parked
-
     // Config store
     private final MqttConnectionStore store;
 
@@ -188,8 +185,8 @@ public class MqttConnectionManager {
         });
         schedulers.put(config.id, scheduler);
 
-        // Schedule publish loop
-        scheduleNext(config.id, config.publishIntervalSeconds);
+        // Schedule publish loop at the min-interval floor.
+        scheduleNext(config.id, Math.max(1, config.minIntervalSeconds));
     }
 
     /**
@@ -231,18 +228,23 @@ public class MqttConnectionManager {
             // Collect telemetry (shared across all connections)
             JSONObject payload = collectTelemetry();
 
-            // Publish
-            publisher.publish(payload);
+            // Supply vehicle identity for Home Assistant discovery (cheap; updated each cycle
+            // because VIN only appears once the BYD SDK has been read at least once).
+            if (config.isHomeAssistant()) {
+                String vin = payload.optString("vin", null);
+                publisher.setHaMeta(vin, null, "OverDrive " + com.overdrive.app.BuildConfig.VERSION_NAME);
+            }
+
+            // Change-gated publish (per-field for HA, full snapshot for aggregate).
+            publisher.publishTelemetry(payload);
 
         } catch (Exception e) {
             logger.error("Publish cycle error for " + config.name + ": " + e.getMessage());
         }
 
-        // Calculate next interval
-        long nextInterval = config.publishIntervalSeconds;
-        if (config.adaptiveInterval && isParked()) {
-            nextInterval = config.publishIntervalSeconds * PARKED_MULTIPLIER;
-        }
+        // The cycle runs at the min-interval floor; the differ enforces the heartbeat
+        // ceiling and skips idle cycles, so the old parked multiplier is no longer needed.
+        long nextInterval = Math.max(1, config.minIntervalSeconds);
 
         // Apply backoff if failing
         long backoff = publisher.getBackoffSeconds();
@@ -281,12 +283,22 @@ public class MqttConnectionManager {
      * @return true if updated
      */
     public boolean updateConnection(String id, JSONObject updates) {
+        // Capture pre-update HA state BEFORE store.update() mutates the live config object.
+        MqttConnectionConfig existing = store.getById(id);
+        boolean wasHa = existing != null && existing.homeAssistantDiscovery;
+        String oldPrefix = existing != null ? existing.discoveryPrefix : "homeassistant";
+
         boolean updated = store.update(id, updates);
         if (!updated) return false;
 
         // Restart the connection to apply changes
         MqttConnectionConfig config = store.getById(id);
         if (config != null) {
+            // If HA discovery was just turned off, retract the device while still connected.
+            if (wasHa && !config.homeAssistantDiscovery) {
+                MqttPublisherService pub = publishers.get(id);
+                if (pub != null) pub.removeDiscovery(oldPrefix);
+            }
             stopConnection(id);
             if (config.enabled && config.isConfigured()) {
                 startConnection(config);
@@ -301,6 +313,13 @@ public class MqttConnectionManager {
      * @return true if deleted
      */
     public boolean deleteConnection(String id) {
+        // Retract HA discovery (while the client is still connected) so deleting a
+        // connection doesn't leave orphaned entities in Home Assistant.
+        MqttConnectionConfig cfg = store.getById(id);
+        MqttPublisherService pub = publishers.get(id);
+        if (pub != null && cfg != null && cfg.isHomeAssistant()) {
+            pub.removeDiscovery(cfg.discoveryPrefix);
+        }
         stopConnection(id);
         return store.delete(id);
     }
@@ -783,22 +802,6 @@ public class MqttConnectionManager {
         lastCollectionTimeMs = now;
 
         return payload;
-    }
-
-    /**
-     * Check if the vehicle is currently parked.
-     */
-    private boolean isParked() {
-        try {
-            BydDataCollector collector = BydDataCollector.getInstance();
-            BydVehicleData vd = collector.isInitialized() ? collector.getData() : null;
-            if (vd != null && vd.gearMode != BydVehicleData.UNAVAILABLE) {
-                return vd.gearMode == GearMonitor.GEAR_P;
-            }
-            return gearMonitor.getCurrentGear() == GearMonitor.GEAR_P;
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     // ==================== GETTERS ====================

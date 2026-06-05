@@ -173,6 +173,78 @@
                     </div>
                 </div>
 
+                <!-- Data Saving -->
+                <div class="card" data-tab="status">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                            <span data-i18n="abrp.data_saving">Data Saving</span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-name" data-i18n="abrp.change_only">Only send on change</div>
+                                <div class="setting-desc" data-i18n="abrp.change_only_desc">Skip uploads when no values changed. A heartbeat still fires at the max interval.</div>
+                            </div>
+                            <div class="setting-control">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="abrpChangeOnly" onchange="ABRP.saveDataSaving()">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div style="margin-top:14px;">
+                            <label style="font-size:12px;color:var(--text-secondary);"><span data-i18n="abrp.min_interval">Min interval — fastest</span>: <span id="abrpMinLabel" style="font-family:'JetBrains Mono',monospace;color:var(--text-primary);">5s</span></label>
+                            <input type="range" id="abrpMinInterval" min="1" max="30" step="1" value="5" style="width:100%;" oninput="ABRP.onSlider()" onchange="ABRP.saveDataSaving()">
+                        </div>
+                        <div style="margin-top:14px;">
+                            <label style="font-size:12px;color:var(--text-secondary);"><span data-i18n="abrp.max_interval">Max interval — heartbeat</span>: <span id="abrpMaxLabel" style="font-family:'JetBrains Mono',monospace;color:var(--text-primary);">2m</span></label>
+                            <input type="range" id="abrpMaxInterval" min="30" max="1800" step="30" value="120" style="width:100%;" oninput="ABRP.onSlider()" onchange="ABRP.saveDataSaving()">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ABRP App Gate -->
+                <div class="card" data-tab="status">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                            <span data-i18n="abrp.app_gate">ABRP App Gate</span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-name" data-i18n="abrp.gate_on_app">Only while ABRP is in use</div>
+                                <div class="setting-desc" data-i18n="abrp.gate_on_app_desc">Stream telemetry only while the ABRP app is open on this head unit — zero uploads otherwise.</div>
+                            </div>
+                            <div class="setting-control">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="abrpGateOnApp" onchange="ABRP.onGateToggle(); ABRP.saveDataSaving()">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div id="abrpGateOptions" style="display:none;">
+                            <div style="margin-top:14px;display:flex;flex-direction:column;gap:4px;">
+                                <label style="font-size:12px;color:var(--text-secondary);" data-i18n="abrp.app_mode">Active when</label>
+                                <select id="abrpAppMode" onchange="ABRP.saveDataSaving()" style="padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border-color);border-radius:8px;color:var(--text-primary);font-size:14px;">
+                                    <option value="foreground" data-i18n="abrp.app_mode_foreground">ABRP is on screen (recommended)</option>
+                                    <option value="running" data-i18n="abrp.app_mode_running">ABRP is running (incl. background)</option>
+                                </select>
+                            </div>
+                            <div style="margin-top:14px;">
+                                <label style="font-size:12px;color:var(--text-secondary);"><span data-i18n="abrp.app_grace">Grace period</span>: <span id="abrpGraceLabel" style="font-family:'JetBrains Mono',monospace;color:var(--text-primary);">90s</span></label>
+                                <input type="range" id="abrpAppGrace" min="0" max="600" step="10" value="90" style="width:100%;" oninput="ABRP.onSlider()" onchange="ABRP.saveDataSaving()">
+                            </div>
+                            <div class="info-box" style="margin-top:12px;">
+                                <div class="info-row"><span class="label" data-i18n="abrp.app_status">ABRP app</span><span class="value" id="abrpAppPresence">--</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Live Telemetry Dashboard -->
                 <div class="card" data-tab="telemetry">
                     <div class="card-header">

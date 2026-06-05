@@ -183,6 +183,16 @@ public class MqttConnectionStore {
             if (updates.has("adaptiveInterval")) existing.adaptiveInterval = updates.optBoolean("adaptiveInterval");
             if (updates.has("retainMessages")) existing.retainMessages = updates.optBoolean("retainMessages");
             if (updates.has("trustAllCerts")) existing.trustAllCerts = updates.optBoolean("trustAllCerts");
+            if (updates.has("minIntervalSeconds")) existing.minIntervalSeconds = updates.optInt("minIntervalSeconds");
+            if (updates.has("maxIntervalSeconds")) existing.maxIntervalSeconds = updates.optInt("maxIntervalSeconds");
+            if (updates.has("changeOnly")) existing.changeOnly = updates.optBoolean("changeOnly");
+            if (updates.has("homeAssistantDiscovery")) existing.homeAssistantDiscovery = updates.optBoolean("homeAssistantDiscovery");
+            if (updates.has("discoveryPrefix")) existing.discoveryPrefix = updates.optString("discoveryPrefix");
+            // Keep the window coherent after a partial update.
+            if (existing.minIntervalSeconds < 1) existing.minIntervalSeconds = 1;
+            if (existing.maxIntervalSeconds < existing.minIntervalSeconds) {
+                existing.maxIntervalSeconds = existing.minIntervalSeconds;
+            }
 
             save();
             logger.info("Updated MQTT connection: " + existing);
