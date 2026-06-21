@@ -7,6 +7,7 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.view.Surface;
 
 import com.overdrive.app.logging.DaemonLogger;
@@ -25,13 +26,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * PanoramicCameraGpu - GPU Edition with Zero-Copy Pipeline.
- * 
+ *
  * This is the GPU-native version of PanoramicCamera that replaces ImageReader
  * with SurfaceTexture. Camera frames flow directly to GPU texture, enabling:
  * - Zero-copy recording (camera → GPU → encoder)
  * - Minimal AI readback (GPU downscales to 320x240)
  * - <10% total CPU usage
- * 
+ *
  * Architecture:
  * - Camera writes to GL_TEXTURE_EXTERNAL_OES via SurfaceTexture
  * - Render loop on dedicated GL thread distributes frames to:
@@ -43,6 +44,9 @@ public class PanoramicCameraGpu {
     private static final DaemonLogger logger = DaemonLogger.getInstance(TAG);
     private static final int PHYSICAL_CAMERA_ID = 1;
     private static final int MAX_CAMERA_ID = 5;     // Probe camera IDs 0-5
+
+    private static final int CPU_BUFFER_SIZE = 1024;
+    private final byte[] cpuBuffer = new byte[CPU_BUFFER_SIZE];
 
     /** Sentry-restart straddle token. The CameraDaemon dilink4 ACC-OFF
      *  handler acquires this BEFORE calling gpuPipeline.stop(), so the
@@ -106,7 +110,7 @@ public class PanoramicCameraGpu {
     private static boolean resolveCameraModeFromConfig() {
         try {
             org.json.JSONObject cam = com.overdrive.app.config.UnifiedConfigManager
-                .loadConfig().optJSONObject("camera");
+                    .loadConfig().optJSONObject("camera");
             if (cam == null) return false;
             String mode = cam.optString("cameraMode", "default");
             return "dilink4".equalsIgnoreCase(mode);
@@ -121,10 +125,10 @@ public class PanoramicCameraGpu {
     public int getCameraLayoutMode() {
         return USE_ESCO_SURFACE_TEXTURE_PATH ? 3 : 0;
     }
-    
+
     // Camera ID override — set via setCameraId() before start()
     private int cameraIdOverride = -1;  // -1 = use default PHYSICAL_CAMERA_ID
-    
+
     // SOTA: Full-matrix auto-probe — sweeps camera IDs 0-5 × surface modes 0-5
     // to find the first combination that produces panoramic image data.
     private boolean autoProbeCameras = false;
@@ -133,27 +137,27 @@ public class PanoramicCameraGpu {
     private int probeStartId = -1;  // Tracks where probe started for wrap-around detection
     private int probeNextCameraId = 0;    // Next camera ID to try
     private int probeNextSurfaceMode = 0; // Next surface mode to try
-    
+
     // SOTA: Probe gate — blocks recording/streaming/AI until probe finds a working camera.
     // Without this, the encoder records BLACK frames and the stream shows garbage during probe.
     // Defaults to true (no gate) — only set to false when setAutoProbeCameras(true) is called.
     private volatile boolean probeComplete = true;
-    
+
     // Track the last camera ID that delivered non-black data during probe.
     // If the probe exhausts all IDs without finding a verified strip, fall back
     // to this camera — it's better to record from a real camera than nothing.
     private int lastDataCameraId = -1;
-    
+
     // Callback when auto-probe discovers a working camera config
     public interface CameraProbeCallback {
         void onCameraFound(int cameraId, int surfaceMode);
     }
     private CameraProbeCallback probeCallback;
-    
+
     // Camera dimensions
     private final int width;
     private final int height;
-    
+
     // EGL and OpenGL
     private EGLCore eglCore;
     private android.opengl.EGLSurface dummySurface;  // Pbuffer for headless context
@@ -216,7 +220,7 @@ public class PanoramicCameraGpu {
     // bind work via onHalImageAvailable.
     private HandlerThread imageReaderThread;
     private Handler imageReaderHandler;
-    
+
     // Camera object (via reflection).
     // volatile because reopenCamera() runs on the daemon thread and writes
     // cameraObj while the GL render thread reads it in renderLoop(). Without
@@ -249,7 +253,7 @@ public class PanoramicCameraGpu {
     // rate. The pending flag closes the race: HAL sets it, GL skips wait()
     // when it's already set, and clears it before processing.
     private volatile boolean imagePending = false;
-    
+
     // Consumers
     private GpuMosaicRecorder recorder;
     private HardwareEventRecorderGpu encoder;  // Direct encoder reference for draining
@@ -281,7 +285,7 @@ public class PanoramicCameraGpu {
     private HighResPreviewSampler highResSampler;
     private SurveillanceEngineGpu sentry;
     private FoveatedCropper foveatedCropper;  // High-res AI crop from raw strip
-    
+
     // Frame timing
     private int frameCounter = 0;
     // AI lane is fully decoupled from the GL thread (AiLaneWorker). GL thread
@@ -327,17 +331,17 @@ public class PanoramicCameraGpu {
     private volatile long lastErrorRestartTime = 0;
     private static final long DILINK4_ERROR_RESTART_MIN_INTERVAL_MS = 60_000L;
     private long startTime = 0;
-    
+
     // Watchdog for GL thread hang detection
     private volatile long lastGlThreadHeartbeat = 0;
     private Thread watchdogThread;
-    private static final long GL_THREAD_TIMEOUT_MS = 3000;
+    private static final long GL_THREAD_TIMEOUT_MS = 3500;
     // Extended timeout for initial camera warmup — the BYD panoramic camera HAL
     // can take several seconds to deliver the first frame. During this period the
     // GL thread is legitimately blocked on frameSync.wait(), not deadlocked.
     private static final long GL_THREAD_WARMUP_TIMEOUT_MS = 10000;
     private volatile boolean firstFrameReceived = false;
-    
+
     // SOTA: BYD camera coordinator for cooperative sharing and error recovery
     private BydCameraCoordinator cameraCoordinator;
     private volatile boolean cameraYielded = false;
@@ -352,7 +356,7 @@ public class PanoramicCameraGpu {
     // (lines 398-406) calls handleNativeAppClosed → onReacquireCamera when the
     // native app releases the camera.
     private volatile Thread yieldPollerThread;
-    private static final long YIELD_POLL_INTERVAL_MS = 5000;
+    private static final long YIELD_POLL_INTERVAL_MS = 1000;
 
     // audit avc-yield (round 2): when onReacquireCamera's GL-handler runnable
     // throws (AVMCamera.open transient false, NoSuchMethodError on a reflection
@@ -395,21 +399,21 @@ public class PanoramicCameraGpu {
 
 
     // Camera health monitor — detects stalled frames and triggers recovery
-    private static final long FRAME_STALL_THRESHOLD_MS = 4000;  // 4 seconds without frames (HAL issue)
+    private static final long FRAME_STALL_THRESHOLD_MS = 5000;  // 4 seconds without frames (HAL issue)
     // When native app is active, use a longer threshold to avoid false yields
     // from transient CPU/IO load. The HAL needs time to settle into sharing mode.
-    private static final long FRAME_STALL_CONTENTION_THRESHOLD_MS = 3000;
+    private static final long FRAME_STALL_CONTENTION_THRESHOLD_MS = 1000;
     // Require consecutive stalls before yielding — a single stall could be transient
-    private static final int CONTENTION_STALL_COUNT_TO_YIELD = 2;
+    private static final int CONTENTION_STALL_COUNT_TO_YIELD = 1;
     private volatile int consecutiveContentionStalls = 0;
-    
+
     // Flag to indicate camera restart is in progress — watchdog uses extended timeout.
     // P1 #11: AtomicBoolean so concurrent restartCameraAfterError + reopenCamera
     // calls can't both enter the restart path. Loser observes
     // compareAndSet(false,true)==false and returns; only the winner runs the
     // close/open sequence and is responsible for clearing the flag.
     private final AtomicBoolean restartInProgress = new AtomicBoolean(false);
-    
+
     // SOTA: Pre-yield listener — pipeline registers this to finalize recordings before yield
     public interface CameraYieldListener {
         /** Called BEFORE camera is yielded. Finalize any active recording to prevent corruption. */
@@ -418,11 +422,11 @@ public class PanoramicCameraGpu {
         void onPostReacquire();
     }
     private CameraYieldListener yieldListener;
-    
+
     // CPU usage monitoring
     private long lastCpuCheckTime = 0;
     private static final long CPU_CHECK_INTERVAL_MS = 10000;  // Every 10 seconds
-    
+
     // Stats logging (time-based, not frame-based)
     private long lastStatsTime = 0;
     private int lastStatsFrameCount = 0;
@@ -516,10 +520,10 @@ public class PanoramicCameraGpu {
     // uTexMatrix in the vertex shader. Only used when the esco SurfaceTexture
     // path is active; legacy ImageReader path leaves it at identity.
     private final float[] currentTexMatrix = {
-        1f, 0f, 0f, 0f,
-        0f, 1f, 0f, 0f,
-        0f, 0f, 1f, 0f,
-        0f, 0f, 0f, 1f,
+            1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f,
     };
 
     /**
@@ -555,23 +559,23 @@ public class PanoramicCameraGpu {
         this.width = width;
         this.height = height;
         this.quadrantStripOffsetX = (quadrantStripOffsetX != null && quadrantStripOffsetX.length == 4)
-            ? quadrantStripOffsetX.clone()
-            : null;
-        this.quadrantCornerOffsetsXY =
-            (quadrantCornerOffsetsXY != null && quadrantCornerOffsetsXY.length == 8)
-                ? quadrantCornerOffsetsXY.clone()
+                ? quadrantStripOffsetX.clone()
                 : null;
+        this.quadrantCornerOffsetsXY =
+                (quadrantCornerOffsetsXY != null && quadrantCornerOffsetsXY.length == 8)
+                        ? quadrantCornerOffsetsXY.clone()
+                        : null;
     }
-    
+
     /**
      * Sets the consumers for the camera frames.
-     * 
+     *
      * @param recorder GPU mosaic recorder for zero-copy recording
      * @param downscaler GPU downscaler for AI lane
      * @param sentry Surveillance engine for motion detection
      */
     public void setConsumers(GpuMosaicRecorder recorder, GpuDownscaler downscaler,
-                            SurveillanceEngineGpu sentry) {
+                             SurveillanceEngineGpu sentry) {
         this.recorder = recorder;
         this.downscaler = downscaler;
         this.sentry = sentry;
@@ -599,10 +603,10 @@ public class PanoramicCameraGpu {
             sentry.setCameraTargetFps(targetFps);
         }
     }
-    
+
     /**
      * Starts the GPU camera pipeline.
-     * 
+     *
      * @throws Exception if initialization fails
      */
     public void start() throws Exception {
@@ -611,10 +615,10 @@ public class PanoramicCameraGpu {
         // field debugging can correlate "what does the recording look like"
         // with "which path the daemon took".
         logger.info("Camera ingestion mode: "
-            + (USE_ESCO_SURFACE_TEXTURE_PATH ? "DiLink 4 (SurfaceTexture passthrough)"
-                                              : "Default (ImageReader + 2x2 rearrangement)"));
+                + (USE_ESCO_SURFACE_TEXTURE_PATH ? "DiLink 4 (SurfaceTexture passthrough)"
+                : "Default (ImageReader + 2x2 rearrangement)"));
         startTime = System.currentTimeMillis();
-        
+
         // SOTA: Initialize BYD camera coordinator for cooperative sharing
         if (cameraCoordinator == null) {
             cameraCoordinator = new BydCameraCoordinator();
@@ -641,11 +645,11 @@ public class PanoramicCameraGpu {
                         try {
                             glHandler.removeCallbacks(staleRetry);
                             logger.info("Yield: cancelled pending postDelayed "
-                                + "reacquire retry (fresh yield supersedes prior "
-                                + "failed-reacquire backoff)");
+                                    + "reacquire retry (fresh yield supersedes prior "
+                                    + "failed-reacquire backoff)");
                         } catch (Throwable th) {
                             logger.warn("Yield: removeCallbacks errored: "
-                                + th.getMessage());
+                                    + th.getMessage());
                         }
                     }
                     if (glHandler != null) {
@@ -678,10 +682,10 @@ public class PanoramicCameraGpu {
                         try {
                             glHandler.removeCallbacks(stale);
                             logger.info("Reacquire (poller path): cancelled "
-                                + "pending postDelayed retry before fresh attempt");
+                                    + "pending postDelayed retry before fresh attempt");
                         } catch (Throwable th) {
                             logger.warn("Reacquire: removeCallbacks errored: "
-                                + th.getMessage());
+                                    + th.getMessage());
                         }
                     }
                     if (glHandler != null) {
@@ -699,7 +703,7 @@ public class PanoramicCameraGpu {
                     long timeSinceStart = System.currentTimeMillis() - lastCameraStartTime;
                     if (timeSinceStart < 3000) {
                         logger.warn("CAMERA ERROR: event=" + eventType + " — IGNORED (camera started " +
-                            timeSinceStart + "ms ago, waiting for frame stall watchdog)");
+                                timeSinceStart + "ms ago, waiting for frame stall watchdog)");
                         return;
                     }
                     // DiLink 4 backoff: byd_apa firmware can emit event=8
@@ -726,9 +730,9 @@ public class PanoramicCameraGpu {
                         long timeSinceLastError = now - lastErrorRestartTime;
                         lastErrorRestartTime = now;
                         logger.warn("CAMERA ERROR: event=" + eventType
-                            + " — IGNORED on dilink4 (esco-parity, "
-                            + (timeSinceLastError == now ? "first" : timeSinceLastError + "ms since last")
-                            + ")");
+                                + " — IGNORED on dilink4 (esco-parity, "
+                                + (timeSinceLastError == now ? "first" : timeSinceLastError + "ms since last")
+                                + ")");
                         return;
                     }
                     logger.error("CAMERA ERROR: event=" + eventType + " — restarting camera");
@@ -737,88 +741,104 @@ public class PanoramicCameraGpu {
                     }
                 }
             });
-            
-            // SOTA: Always register with IBYDCameraService so we can poll for native app activity.
-            // BydCameraCoordinator.register() only connects to the service; it does NOT
-            // participate in arbitration (registerUser is disabled there), so it's safe
-            // even on dilink4 boards.
-            cameraCoordinator.register();
-        }
-        
-        // Start GL thread
-        glThread = new HandlerThread("GL-RenderLoop");
-        glThread.start();
-        glHandler = new Handler(glThread.getLooper());
-
-        // Tier 1 wiring: the AI-lane GL thread needs the camera frame seq
-        // and texture id, both of which live on this instance. Implement
-        // CameraState here.
-        final AiLaneGl.CameraState aiCameraState = new AiLaneGl.CameraState() {
-            @Override public int getCameraTextureId() { return cameraTextureId; }
-            @Override public long getFrameSeq()      { return cameraFrameSeq.get(); }
-        };
-
-        if (sentry != null) {
-            sentry.setCameraTargetFps(targetFps);
-        }
-
-        // Initialize on GL thread
-        glHandler.post(() -> {
-            try {
-                initializeGl();
-
-                // SOTA FIX: Delay camera opening if ACC is ON to prevent AVM "no signal".
-                // We wait for the system app to claim the primary slot first.
-                if (AccMonitor.isAccOn() && cameraCoordinator != null && cameraCoordinator.isRegistered()) {
-                    logger.info("Startup: ACC is ON, waiting for system camera apps to initialize...");
-                    long deadline = System.currentTimeMillis() + 3000;
-                    while (System.currentTimeMillis() < deadline) {
-                        if (cameraCoordinator.checkNativeAppActive()) {
-                            logger.info("Startup: native AVM app detected — will attach as secondary consumer");
-                            // Wait a bit more for it to fully settle (500ms is enough for HAL)
-                            try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-                            break;
-                        }
-                        // Short poll interval (200ms) for faster detection
-                        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
-                    }
-                }
-
-                startCamera();
-
-                // SOTA: Setup event callback for HAL error detection (-10086, 8)
-                if (cameraCoordinator != null && cameraObj != null) {
-                    cameraCoordinator.setupEventCallback(cameraObj);
-                }
-
-                // Tier 1: the AI-lane GL thread + its second EGL context +
-                // FoveatedCropper FBO/PBO ring (~6.5MB GPU + ~2.8MB CPU) are
-                // brought up LAZILY on the first surveillance-active frame
-                // (see ensureAiLaneStarted in renderLoop), NOT eagerly here.
-                // Both AI consumers are surveillance-only, so in every ACC-ON
-                // recording mode where sentry never activates (CONTINUOUS /
-                // DRIVE_MODE / PROXIMITY_GUARD) the lane + its memory + its
-                // idle thread/context never exist. It is created when sentry
-                // arms and torn back down when sentry disarms. The CameraState
-                // (aiCameraState) is captured into a field for the lazy path.
-                this.aiCameraStateRef = aiCameraState;
-
-                running = true;
-
-                // Start render loop
-                glHandler.post(this::renderLoop);
-
-                // Start watchdog
-                startWatchdog();
-
-                logger.info("GPU camera pipeline started (AI lane on dedicated GL thread)");
-            } catch (Exception e) {
-                logger.error("Failed to start GPU pipeline", e);
-                throw new RuntimeException(e);
+            // Esco-parity: skip IBYDCameraService binder registration on
+            // dilink4 (byd_apa). Esco never touches the bydcameramanager
+            // service — it opens AVMCamera directly. The arbitration
+            // protocol may require an IBYDCameraUser.onYield ack we never
+            // send; the HAL can stay in "waiting for user-ack" state and
+            // refuse to stream frames. See audit Top-5 #5.
+            if (!USE_ESCO_SURFACE_TEXTURE_PATH) {
+                cameraCoordinator.register();
+            } else {
+                logger.info("dilink4: skipping IBYDCameraService registration (esco-parity)");
             }
-        });
+        }
+
+        // SOTA: Use a high-priority dedicated thread for rendering (URGENT_DISPLAY).
+        // Standard HandlerThread is replaced with a custom Thread to ensure 
+        // immediate priority application and reduced overhead.
+        final java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+        glThread = new Thread(() -> {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
+            Looper.prepare();
+            glHandler = new Handler(Looper.myLooper());
+            
+            glHandler.post(() -> {
+                try {
+                    initializeGl();
+                    
+                    // SOTA FIX: Delay camera opening if ACC is ON to prevent AVM "no signal".
+                    // We wait for the system app to claim the primary slot first.
+                    if (AccMonitor.isAccOn() && cameraCoordinator != null && cameraCoordinator.isRegistered()) {
+                        com.overdrive.app.byd.BydDataCollector collector = 
+                            com.overdrive.app.byd.BydDataCollector.getInstance();
+                            
+                        logger.info("Startup: ACC is ON, checking for AVM activity...");
+                        
+                        // We wait up to 4 seconds for the native AVM app to claim the slot.
+                        // If it's visible, we wait for it to initialize properly.
+                        long deadline = System.currentTimeMillis() + 4000;
+                        boolean avmDetected = false;
+                        while (System.currentTimeMillis() < deadline && running) {
+                            if (collector.isAvmAppVisible() || cameraCoordinator.checkNativeAppActive()) {
+                                avmDetected = true;
+                                logger.info("Startup: native AVM app detected — will attach as secondary consumer");
+                                // Wait a bit more for it to fully settle (HAL handoff)
+                                synchronized (frameSync) {
+                                    try { frameSync.wait(1000); } catch (InterruptedException ignored) {}
+                                }
+                                break;
+                            }
+                            // Short poll interval for fast boot
+                            synchronized (frameSync) {
+                                try { frameSync.wait(250); } catch (InterruptedException ignored) {}
+                            }
+                        }
+                        if (!avmDetected && running) {
+                            logger.info("Startup: no native AVM app detected after wait");
+                        }
+                    }
+
+                    startCamera();
+
+                    // SOTA: Setup event callback for HAL error detection (-10086, 8)
+                    if (cameraCoordinator != null && cameraObj != null) {
+                        cameraCoordinator.setupEventCallback(cameraObj);
+                    }
+
+                    // Tier 1 wiring: the AI-lane GL thread needs the camera frame seq
+                    // and texture id. Capture into a field for lazy bring-up.
+                    this.aiCameraStateRef = new AiLaneGl.CameraState() {
+                        @Override public int getCameraTextureId() { return cameraTextureId; }
+                        @Override public long getFrameSeq()      { return cameraFrameSeq.get(); }
+                    };
+
+                    running = true;
+
+                    // Start render loop
+                    glHandler.post(this::renderLoop);
+
+                    // Start watchdog
+                    startWatchdog();
+
+                    logger.info("GPU camera pipeline started (URGENT_DISPLAY priority)");
+                } catch (Exception e) {
+                    logger.error("Failed to start GPU pipeline", e);
+                } finally {
+                    startLatch.countDown();
+                }
+            });
+            
+            Looper.loop();
+        }, "GL-RenderLoop");
+        glThread.start();
+        
+        try {
+            // Wait for thread to initialize glHandler so subsequent calls don't NPE
+            startLatch.await(2000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {}
     }
-    
+
     /**
      * Bring up the AI lane (AiLaneGl thread + shared EGL context + FoveatedCropper
      * FBO/PBO ring) lazily on the first surveillance-active frame. MUST run on the
@@ -891,15 +911,15 @@ public class PanoramicCameraGpu {
     private void initializeGl() {
         // Create EGL context
         eglCore = new EGLCore();
-        
+
         // Create a dummy pbuffer surface and make it current
         // This is required before any OpenGL calls can be made
         dummySurface = eglCore.createPbufferSurface(1, 1);
         eglCore.makeCurrent(dummySurface);
-        
+
         // Log GL info (now that context is current)
         GlUtil.logGlInfo();
-        
+
         // Create camera texture (OES type for external camera)
         cameraTextureId = GlUtil.createExternalTexture();
         windshieldTextureId = GlUtil.createExternalTexture();
@@ -915,14 +935,14 @@ public class PanoramicCameraGpu {
         } else {
             createCameraImageReader();
         }
-        
+
         // Initialize GPU components now that EGL context exists
         if (recorder != null) {
             // Recorder needs to be initialized with EGLCore and encoder
             // This should be done by the caller after encoder is created
             logger.debug( "Recorder initialization deferred to caller");
         }
-        
+
         if (downscaler != null) {
             // The downscaler's init() spawns ITS OWN HandlerThread+EGL for the
             // legacy ImageReader-backed probe path (readPixels). That path is
@@ -955,26 +975,26 @@ public class PanoramicCameraGpu {
             // and the engine's quadrant grid disagree.
             if (USE_ESCO_SURFACE_TEXTURE_PATH) {
                 downscaler.setProducerCornerMap(
-                    new float[] { 0.0f, 0.0f },  // Front  → producer TL
-                    new float[] { 0.5f, 0.5f },  // Right  → producer BR
-                    new float[] { 0.5f, 0.0f },  // Rear   → producer TR
-                    new float[] { 0.0f, 0.5f }); // Left   → producer BL
+                        new float[] { 0.0f, 0.0f },  // Front  → producer TL
+                        new float[] { 0.5f, 0.5f },  // Right  → producer BR
+                        new float[] { 0.5f, 0.0f },  // Rear   → producer TR
+                        new float[] { 0.0f, 0.5f }); // Left   → producer BL
                 downscaler.setFlipFlags(
-                    new float[] { 1.0f, 1.0f },  // Front  X+Y-flip
-                    new float[] { 0.0f, 1.0f },  // Right  Y-flip
-                    new float[] { 0.0f, 0.0f },  // Rear   no flip
-                    new float[] { 0.0f, 0.0f }); // Left   no flip
+                        new float[] { 1.0f, 1.0f },  // Front  X+Y-flip
+                        new float[] { 0.0f, 1.0f },  // Right  Y-flip
+                        new float[] { 0.0f, 0.0f },  // Rear   no flip
+                        new float[] { 0.0f, 0.0f }); // Left   no flip
                 // Red-overlay suppression on the AI lane. Same dilink4RedMask
                 // unified-config flag the recorder reads — keeps motion
                 // thumbnails clean of the HAL "calibration failed" chrome.
                 try {
                     org.json.JSONObject camCfgDs = com.overdrive.app.config
-                        .UnifiedConfigManager.loadConfig().optJSONObject("camera");
+                            .UnifiedConfigManager.loadConfig().optJSONObject("camera");
                     if (camCfgDs != null) {
                         downscaler.setRedMaskEnabled(
-                            camCfgDs.optBoolean("dilink4RedMask", false));
+                                camCfgDs.optBoolean("dilink4RedMask", false));
                         downscaler.setApaCenterInset(
-                            (float) camCfgDs.optDouble("dilink4ApaCenterInset", 0.09375));
+                                (float) camCfgDs.optDouble("dilink4ApaCenterInset", 0.09375));
                     }
                 } catch (Throwable t) {
                     logger.warn("Downscaler red-mask flag read failed: " + t.getMessage());
@@ -990,7 +1010,7 @@ public class PanoramicCameraGpu {
         // Tier 1 — the readback in crop() would still serialize against
         // the encoder thread's eglSwapBuffers.
         foveatedCropper = new FoveatedCropper(width, height,
-            quadrantStripOffsetX, quadrantCornerOffsetsXY);
+                quadrantStripOffsetX, quadrantCornerOffsetsXY);
         // Cropper picks 4-strip vs 2x2 corner geometry from the active
         // layout mode. Layout 0 = legacy 4-strip; layout 3 = DiLink 4 /
         // 2x2-native HAL with Variant A producer-corner remap pushed below.
@@ -1002,25 +1022,25 @@ public class PanoramicCameraGpu {
         // V2 motion crops align with the recorder's mosaic.
         if (USE_ESCO_SURFACE_TEXTURE_PATH) {
             foveatedCropper.setProducerCornerMap(
-                new float[] { 0.0f, 0.0f },  // Front  → producer TL
-                new float[] { 0.5f, 0.5f },  // Right  → producer BR
-                new float[] { 0.5f, 0.0f },  // Rear   → producer TR
-                new float[] { 0.0f, 0.5f }); // Left   → producer BL
+                    new float[] { 0.0f, 0.0f },  // Front  → producer TL
+                    new float[] { 0.5f, 0.5f },  // Right  → producer BR
+                    new float[] { 0.5f, 0.0f },  // Rear   → producer TR
+                    new float[] { 0.0f, 0.5f }); // Left   → producer BL
             foveatedCropper.setFlipFlags(
-                new float[] { 1.0f, 0.0f },  // Front  X-flip
-                new float[] { 0.0f, 0.0f },  // Right  no flip
-                new float[] { 0.0f, 1.0f },  // Rear   Y-flip
-                new float[] { 0.0f, 1.0f }); // Left   Y-flip
+                    new float[] { 1.0f, 0.0f },  // Front  X-flip
+                    new float[] { 0.0f, 0.0f },  // Right  no flip
+                    new float[] { 0.0f, 1.0f },  // Rear   Y-flip
+                    new float[] { 0.0f, 1.0f }); // Left   Y-flip
             // Red-overlay suppression on AI thumbnails too — same flag the
             // recorder/stream/downscaler read.
             try {
                 org.json.JSONObject camCfgFc = com.overdrive.app.config
-                    .UnifiedConfigManager.loadConfig().optJSONObject("camera");
+                        .UnifiedConfigManager.loadConfig().optJSONObject("camera");
                 if (camCfgFc != null) {
                     foveatedCropper.setRedMaskEnabled(
-                        camCfgFc.optBoolean("dilink4RedMask", false));
+                            camCfgFc.optBoolean("dilink4RedMask", false));
                     foveatedCropper.setApaCenterInset(
-                        (float) camCfgFc.optDouble("dilink4ApaCenterInset", 0.09375));
+                            (float) camCfgFc.optDouble("dilink4ApaCenterInset", 0.09375));
                 }
             } catch (Throwable t) {
                 logger.warn("Cropper red-mask flag read failed: " + t.getMessage());
@@ -1029,12 +1049,12 @@ public class PanoramicCameraGpu {
 
         logger.info("OpenGL initialized (texture=" + cameraTextureId + ")");
     }
-    
+
     /**
      * Initializes the recorder on the GL thread.
-     * 
+     *
      * This must be called after the GL context is created and made current.
-     * 
+     *
      * @param recorder GPU mosaic recorder to initialize
      * @param encoder Hardware encoder providing the input surface
      */
@@ -1043,10 +1063,10 @@ public class PanoramicCameraGpu {
             logger.error( "GL thread not started");
             return;
         }
-        
+
         // Store encoder reference for draining in render loop
         this.encoder = encoder;
-        
+
         glHandler.post(() -> {
             try {
                 recorder.init(eglCore, encoder);
@@ -1070,32 +1090,32 @@ public class PanoramicCameraGpu {
             }
         });
     }
-    
+
     // Callback for when recorder is initialized
     private Runnable recorderInitCallback;
-    
+
     /**
      * Sets a callback to be invoked when the recorder is initialized.
-     * 
+     *
      * @param callback Callback to run on GL thread after recorder init
      */
     public void setRecorderInitCallback(Runnable callback) {
         this.recorderInitCallback = callback;
     }
-    
+
     /**
      * Initializes the stream scaler on the GL thread.
-     * 
+     *
      * @param streamScaler GPU stream scaler to initialize
      * @param streamEncoder Hardware encoder for streaming
      */
     public void initStreamScalerOnGlThread(com.overdrive.app.streaming.GpuStreamScaler streamScaler,
-                                          HardwareEventRecorderGpu streamEncoder) {
+                                           HardwareEventRecorderGpu streamEncoder) {
         if (glHandler == null) {
             logger.error("GL thread not started");
             return;
         }
-        
+
         glHandler.post(() -> {
             try {
                 streamScaler.init(eglCore, streamEncoder);
@@ -1105,19 +1125,19 @@ public class PanoramicCameraGpu {
             }
         });
     }
-    
+
     /**
      * Gets the EGL core for initializing GPU components.
-     * 
+     *
      * @return EGLCore instance (only valid after start() is called)
      */
     public EGLCore getEglCore() {
         return eglCore;
     }
-    
+
     /**
      * Recreates the SurfaceTexture and Surface for camera switching.
-     * 
+     *
      * The BYD AVMCamera HAL doesn't properly deliver frames to a Surface
      * that was previously connected to a different camera ID. After the first
      * frame, subsequent frames are never delivered, causing a frozen image.
@@ -1125,8 +1145,8 @@ public class PanoramicCameraGpu {
      */
     private void recreateCameraSurface() {
         logger.info("Recreating "
-            + (USE_ESCO_SURFACE_TEXTURE_PATH ? "SurfaceTexture" : "ImageReader")
-            + " consumer for camera switch...");
+                + (USE_ESCO_SURFACE_TEXTURE_PATH ? "SurfaceTexture" : "ImageReader")
+                + " consumer for camera switch...");
         releaseCameraConsumer();
         if (USE_ESCO_SURFACE_TEXTURE_PATH) {
             createCameraSurfaceTexture();
@@ -1220,12 +1240,12 @@ public class PanoramicCameraGpu {
         logAvmCalibrationProps();
 
         Method mAddTexture = avmClass.getDeclaredMethod(
-            "addTexture", SurfaceTexture.class, int.class);
+                "addTexture", SurfaceTexture.class, int.class);
         mAddTexture.setAccessible(true);
         mAddTexture.invoke(cameraObj, cameraSurfaceTexture, previewIndex);
 
         Method mSetTexture = avmClass.getDeclaredMethod(
-            "setTexture", SurfaceTexture.class, int.class);
+                "setTexture", SurfaceTexture.class, int.class);
         mSetTexture.setAccessible(true);
         mSetTexture.invoke(cameraObj, cameraSurfaceTexture, previewIndex);
 
@@ -1233,8 +1253,8 @@ public class PanoramicCameraGpu {
         mStart.setAccessible(true);
         Object startResult = mStart.invoke(cameraObj);
         logger.info("Esco-path attached: addTexture+setTexture(idx=" + previewIndex
-            + ") + startPreview → " + startResult
-            + " (cameraId=" + cameraId + ")");
+                + ") + startPreview → " + startResult
+                + " (cameraId=" + cameraId + ")");
 
         // Re-arm the first-frame transform-matrix log so we print it on the
         // next frame after every (re)attach, not just the very first
@@ -1259,11 +1279,11 @@ public class PanoramicCameraGpu {
             int wInt = (w instanceof Integer) ? (Integer) w : 0;
             int hInt = (h instanceof Integer) ? (Integer) h : 0;
             logger.info("BmmCameraInfo declared dims for cam=" + cameraId
-                + ": " + wInt + "x" + hInt
-                + (wInt == 0 || hInt == 0
+                    + ": " + wInt + "x" + hInt
+                    + (wInt == 0 || hInt == 0
                     ? "  (HAL has no entry — vehicle.config.cam_sort empty)"
                     : "")
-                + "; pipeline configured " + width + "x" + height);
+                    + "; pipeline configured " + width + "x" + height);
             // BmmCameraInfo's "single preview" reports per-quadrant; the
             // mosaic-doubled dims that AVMCamera emits for previewIndex=0
             // are 2*W x 2*H per esco's C6500c.m28945a:88. Spell that out.
@@ -1271,7 +1291,7 @@ public class PanoramicCameraGpu {
                 int mosaicW = wInt * 2;
                 int mosaicH = hInt * 2;
                 logger.info("  → mosaic-doubled would be " + mosaicW + "x" + mosaicH
-                    + " (esco AVMCamera 2x scale rule)");
+                        + " (esco AVMCamera 2x scale rule)");
             }
         } catch (ClassNotFoundException e) {
             logger.info("BmmCameraInfo class not present — skipping dim probe");
@@ -1297,11 +1317,11 @@ public class PanoramicCameraGpu {
             String panoCam   = safeGetProp(get, "vehicle.config.pano_cam");
             String panoLCam  = safeGetProp(get, "vehicle.config.pano_l_cam");
             logger.info("AVM calibration props:"
-                + " autostudy.avm=" + describeProp(autostudy)
-                + " camInfo.avm=" + describeProp(camInfo)
-                + " cam_sort=" + describeProp(camSort)
-                + " pano_cam=" + describeProp(panoCam)
-                + " pano_l_cam=" + describeProp(panoLCam));
+                    + " autostudy.avm=" + describeProp(autostudy)
+                    + " camInfo.avm=" + describeProp(camInfo)
+                    + " cam_sort=" + describeProp(camSort)
+                    + " pano_cam=" + describeProp(panoCam)
+                    + " pano_l_cam=" + describeProp(panoLCam));
             if (isBlank(autostudy) && isBlank(camInfo)) {
                 // Information only. The HAL gates the red 'calibration failed'
                 // overlay on this property being non-empty; nothing in
@@ -1311,9 +1331,9 @@ public class PanoramicCameraGpu {
                 // writes (verified rc=1 in the field). When this fires the
                 // user's only software remedy is the GL red-mask filter.
                 logger.info("AVM is UNCALIBRATED on this vehicle (autostudy "
-                    + "and camInfo properties are empty). The HAL will paint "
-                    + "a red banner into the producer surface; enable "
-                    + "dilink4RedMask to mask it cosmetically.");
+                        + "and camInfo properties are empty). The HAL will paint "
+                        + "a red banner into the producer surface; enable "
+                        + "dilink4RedMask to mask it cosmetically.");
             }
         } catch (Throwable t) {
             logger.warn("AVM calibration prop probe failed: " + t.getMessage());
@@ -1351,7 +1371,7 @@ public class PanoramicCameraGpu {
         try {
             Class<?> avmClass = Class.forName("android.hardware.AVMCamera");
             Method mRmTexture = avmClass.getDeclaredMethod(
-                "rmTexture", SurfaceTexture.class, int.class);
+                    "rmTexture", SurfaceTexture.class, int.class);
             mRmTexture.setAccessible(true);
             mRmTexture.invoke(cam, st, cameraSurfaceMode);
         } catch (NoSuchMethodException ignored) {
@@ -1462,21 +1482,21 @@ public class PanoramicCameraGpu {
         try {
             long usage = HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE;
             cameraImageReader = ImageReader.newInstance(
-                width, height,
-                ImageFormat.PRIVATE,
-                poolSize,
-                usage);
+                    width, height,
+                    ImageFormat.PRIVATE,
+                    poolSize,
+                    usage);
         } catch (Throwable t) {
             // Some BYD HAL builds may reject PRIVATE — fall back to YUV_420_888.
             logger.warn("ImageReader PRIVATE init failed: " + t.getMessage()
-                + " — falling back to YUV_420_888");
+                    + " — falling back to YUV_420_888");
             cameraImageReader = ImageReader.newInstance(
-                width, height,
-                ImageFormat.YUV_420_888,
-                poolSize);
+                    width, height,
+                    ImageFormat.YUV_420_888,
+                    poolSize);
         }
         cameraImageReader.setOnImageAvailableListener(
-            this::onHalImageAvailable, imageReaderHandler);
+                this::onHalImageAvailable, imageReaderHandler);
         cameraSurface = cameraImageReader.getSurface();
     }
 
@@ -1527,20 +1547,20 @@ public class PanoramicCameraGpu {
         }
         try {
             windshieldImageReader = ImageReader.newInstance(
-                1920, 1080,
-                ImageFormat.PRIVATE,
-                4,
-                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE);
+                    1920, 1080,
+                    ImageFormat.PRIVATE,
+                    4,
+                    HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE);
         } catch (Throwable t) {
             logger.warn("Windshield ImageReader PRIVATE init failed: " + t.getMessage()
-                + " — falling back to YUV_420_888");
+                    + " — falling back to YUV_420_888");
             windshieldImageReader = ImageReader.newInstance(
-                1920, 1080,
-                ImageFormat.YUV_420_888,
-                4);
+                    1920, 1080,
+                    ImageFormat.YUV_420_888,
+                    4);
         }
         windshieldImageReader.setOnImageAvailableListener(this::onWindshieldImageAvailable,
-            imageReaderHandler);
+                imageReaderHandler);
         windshieldSurface = windshieldImageReader.getSurface();
     }
 
@@ -1574,7 +1594,7 @@ public class PanoramicCameraGpu {
             mOpen.setAccessible(true);
             if (!(boolean) mOpen.invoke(windshieldCameraObj)) {
                 throw new RuntimeException("AVMCamera.open() returned false (id="
-                    + windshieldCameraId + ")");
+                        + windshieldCameraId + ")");
             }
 
             AvmCameraHelper.setCameraFps(windshieldCameraObj, targetFps);
@@ -1596,7 +1616,7 @@ public class PanoramicCameraGpu {
             logger.info("Windshield camera started (id=" + windshieldCameraId + ")");
         } catch (Throwable t) {
             logger.warn("Windshield camera unavailable; dashcam layout will fall back to 360 front: "
-                + t.getMessage());
+                    + t.getMessage());
             windshieldOpenFailed = true;
             stopWindshieldCameraOnGlThread();
         }
@@ -1647,9 +1667,9 @@ public class PanoramicCameraGpu {
 
         cameraYielded = false;
         lastCameraStartTime = System.currentTimeMillis();
-        logger.info("Camera started (" + width + "x" + height + 
-            ", id=" + cameraId + ", surfaceMode=" + cameraSurfaceMode + ")");
-        
+        logger.info("Camera started (" + width + "x" + height +
+                ", id=" + cameraId + ", surfaceMode=" + cameraSurfaceMode + ")");
+
         // Update coordinator with actual camera ID
         if (cameraCoordinator != null) {
             cameraCoordinator.setActiveCameraId(cameraId);
@@ -1757,12 +1777,12 @@ public class PanoramicCameraGpu {
                 }
             } catch (NoSuchMethodException e2) {
                 throw new RuntimeException(
-                    "AVMCamera API not compatible: no constructor(int) and no static open(int). " +
-                    "Available constructors: " + Arrays.toString(avmClass.getDeclaredConstructors()) +
-                    ", methods: " + Arrays.toString(avmClass.getDeclaredMethods()), e2);
+                        "AVMCamera API not compatible: no constructor(int) and no static open(int). " +
+                                "Available constructors: " + Arrays.toString(avmClass.getDeclaredConstructors()) +
+                                ", methods: " + Arrays.toString(avmClass.getDeclaredMethods()), e2);
             }
         }
-        
+
         // Set FPS BEFORE attaching any consumer. On DiLink 3.x firmware the
         // HAL rejects setCameraFps once a consumer is bound — even before
         // startPreview. Order matches both esco's AVMCameraRecorder and the
@@ -1803,7 +1823,7 @@ public class PanoramicCameraGpu {
             logger.info("Camera started (id=" + cameraId + ", targetFps=" + targetFps + ")");
         }
     }
-    
+
     // Diagnostic counters for the ImageReader frame flow. Kept in place as
     // permanent instrumentation since the path crosses two threads + a
     // gralloc lifetime boundary; surfacing health via 2-min Stats line is
@@ -1927,12 +1947,12 @@ public class PanoramicCameraGpu {
                 int emittedH = image.getHeight();
                 if (emittedW != width || emittedH != height) {
                     logger.warn("HAL emitted " + emittedW + "x" + emittedH
-                        + " but pipeline configured " + width + "x" + height
-                        + " — mosaic/foveated geometry assumes the configured size."
-                        + " Pick a different camera profile if this looks wrong.");
+                            + " but pipeline configured " + width + "x" + height
+                            + " — mosaic/foveated geometry assumes the configured size."
+                            + " Pick a different camera profile if this looks wrong.");
                 } else {
                     logger.info("HAL emitted " + emittedW + "x" + emittedH
-                        + " (matches configured " + width + "x" + height + ")");
+                            + " (matches configured " + width + "x" + height + ")");
                 }
                 emittedDimsLogged = true;
             }
@@ -1943,7 +1963,7 @@ public class PanoramicCameraGpu {
                 return false;
             }
             boolean bound = HardwareBufferTextureBinder
-                .bindHardwareBufferToTextureNative(hwBuffer, cameraTextureId);
+                    .bindHardwareBufferToTextureNative(hwBuffer, cameraTextureId);
             if (!bound) {
                 logger.warn("bindHardwareBufferToTexture failed — dropping frame");
                 irBindFailCount++;
@@ -2001,10 +2021,16 @@ public class PanoramicCameraGpu {
     private boolean consumeSurfaceTextureFrame() {
         SurfaceTexture st = cameraSurfaceTexture;
         if (st == null) return false;
+
         try {
             st.updateTexImage();
+        } catch (IllegalStateException e) {
+            // OTIMIZAÇÃO: O BufferQueue pode ser abandonado pelo HAL da BYD de forma
+            // assíncrona (especialmente durante transições de marcha ou abertura do AVM).
+            // Fazer o drop do frame graciosamente evita que a GL Thread exploda.
+            logger.warn("BufferQueue abandonado pelo HAL, ignorando frame: " + e.getMessage());
+            return false;
         } catch (Throwable t) {
-            // BufferQueue can be in disconnected state during reopen — log and skip.
             logger.warn("updateTexImage failed: " + t.getMessage());
             return false;
         }
@@ -2098,12 +2124,12 @@ public class PanoramicCameraGpu {
     private int probeUTexSamplerLoc = -1;
     private int probeUTexMatrixLoc = -1;
     private final java.nio.FloatBuffer probeQuadVerts =
-        java.nio.ByteBuffer.allocateDirect(16 * 4)
-            .order(java.nio.ByteOrder.nativeOrder())
-            .asFloatBuffer();
+            java.nio.ByteBuffer.allocateDirect(16 * 4)
+                    .order(java.nio.ByteOrder.nativeOrder())
+                    .asFloatBuffer();
     private final java.nio.ByteBuffer probeReadBuffer =
-        java.nio.ByteBuffer.allocateDirect(4)
-            .order(java.nio.ByteOrder.nativeOrder());
+            java.nio.ByteBuffer.allocateDirect(4)
+                    .order(java.nio.ByteOrder.nativeOrder());
     private long probeFrameCount = 0L;
     private long probeNonZeroFrames = 0L;
     private long probeLastLogMs = 0L;
@@ -2111,23 +2137,23 @@ public class PanoramicCameraGpu {
     private static final int PROBE_EVERY_N_FRAMES = 30;
 
     private static final String PROBE_VS =
-        "attribute vec2 aPos;\n" +
-        "attribute vec2 aTex;\n" +
-        "uniform mat4 uTexMatrix;\n" +
-        "varying vec2 vTex;\n" +
-        "void main() {\n" +
-        "  gl_Position = vec4(aPos, 0.0, 1.0);\n" +
-        "  vTex = (uTexMatrix * vec4(aTex, 0.0, 1.0)).xy;\n" +
-        "}";
+            "attribute vec2 aPos;\n" +
+                    "attribute vec2 aTex;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "varying vec2 vTex;\n" +
+                    "void main() {\n" +
+                    "  gl_Position = vec4(aPos, 0.0, 1.0);\n" +
+                    "  vTex = (uTexMatrix * vec4(aTex, 0.0, 1.0)).xy;\n" +
+                    "}";
 
     private static final String PROBE_FS =
-        "#extension GL_OES_EGL_image_external : require\n" +
-        "precision mediump float;\n" +
-        "uniform samplerExternalOES uTex;\n" +
-        "varying vec2 vTex;\n" +
-        "void main() {\n" +
-        "  gl_FragColor = texture2D(uTex, vTex);\n" +
-        "}";
+            "#extension GL_OES_EGL_image_external : require\n" +
+                    "precision mediump float;\n" +
+                    "uniform samplerExternalOES uTex;\n" +
+                    "varying vec2 vTex;\n" +
+                    "void main() {\n" +
+                    "  gl_FragColor = texture2D(uTex, vTex);\n" +
+                    "}";
 
     private boolean ensureProbeResources() {
         if (probeFbo != 0) return true;
@@ -2138,12 +2164,12 @@ public class PanoramicCameraGpu {
             probeColorTex = tex[0];
             android.opengl.GLES20.glBindTexture(android.opengl.GLES20.GL_TEXTURE_2D, probeColorTex);
             android.opengl.GLES20.glTexImage2D(android.opengl.GLES20.GL_TEXTURE_2D, 0,
-                android.opengl.GLES20.GL_RGBA, 1, 1, 0,
-                android.opengl.GLES20.GL_RGBA, android.opengl.GLES20.GL_UNSIGNED_BYTE, null);
+                    android.opengl.GLES20.GL_RGBA, 1, 1, 0,
+                    android.opengl.GLES20.GL_RGBA, android.opengl.GLES20.GL_UNSIGNED_BYTE, null);
             android.opengl.GLES20.glTexParameteri(android.opengl.GLES20.GL_TEXTURE_2D,
-                android.opengl.GLES20.GL_TEXTURE_MIN_FILTER, android.opengl.GLES20.GL_LINEAR);
+                    android.opengl.GLES20.GL_TEXTURE_MIN_FILTER, android.opengl.GLES20.GL_LINEAR);
             android.opengl.GLES20.glTexParameteri(android.opengl.GLES20.GL_TEXTURE_2D,
-                android.opengl.GLES20.GL_TEXTURE_MAG_FILTER, android.opengl.GLES20.GL_LINEAR);
+                    android.opengl.GLES20.GL_TEXTURE_MAG_FILTER, android.opengl.GLES20.GL_LINEAR);
             android.opengl.GLES20.glBindTexture(android.opengl.GLES20.GL_TEXTURE_2D, 0);
 
             int[] fbo = new int[1];
@@ -2151,8 +2177,8 @@ public class PanoramicCameraGpu {
             probeFbo = fbo[0];
             android.opengl.GLES20.glBindFramebuffer(android.opengl.GLES20.GL_FRAMEBUFFER, probeFbo);
             android.opengl.GLES20.glFramebufferTexture2D(android.opengl.GLES20.GL_FRAMEBUFFER,
-                android.opengl.GLES20.GL_COLOR_ATTACHMENT0,
-                android.opengl.GLES20.GL_TEXTURE_2D, probeColorTex, 0);
+                    android.opengl.GLES20.GL_COLOR_ATTACHMENT0,
+                    android.opengl.GLES20.GL_TEXTURE_2D, probeColorTex, 0);
             int status = android.opengl.GLES20.glCheckFramebufferStatus(android.opengl.GLES20.GL_FRAMEBUFFER);
             android.opengl.GLES20.glBindFramebuffer(android.opengl.GLES20.GL_FRAMEBUFFER, 0);
             if (status != android.opengl.GLES20.GL_FRAMEBUFFER_COMPLETE) {
@@ -2168,10 +2194,10 @@ public class PanoramicCameraGpu {
 
             // Full-screen quad. NDC pos + UV (0..1).
             probeQuadVerts.put(new float[]{
-                -1f, -1f,  0f, 0f,
-                 1f, -1f,  1f, 0f,
-                -1f,  1f,  0f, 1f,
-                 1f,  1f,  1f, 1f,
+                    -1f, -1f,  0f, 0f,
+                    1f, -1f,  1f, 0f,
+                    -1f,  1f,  0f, 1f,
+                    1f,  1f,  1f, 1f,
             }).position(0);
 
             logger.info("dilink4 OES pixel probe initialized");
@@ -2186,6 +2212,10 @@ public class PanoramicCameraGpu {
     private void probeOesPixel() {
         probeFrameCount++;
         if (probeFrameCount % PROBE_EVERY_N_FRAMES != 0) return;
+
+        // OTIMIZAÇÃO: A leitura síncrona glReadPixels foi desativada para evitar
+        // pipeline flushes na GPU Adreno, eliminando stutters a cada 1 segundo.
+        /*
         if (!ensureProbeResources()) return;
         if (cameraTextureId == 0) return;
 
@@ -2236,11 +2266,11 @@ public class PanoramicCameraGpu {
                     + " last RGBA=(" + r + "," + g + "," + b + "," + a + ")");
             }
         } catch (Throwable t) {
-            // Non-fatal — don't take down the render loop on a probe error.
             logger.warn("probeOesPixel error: " + t.getMessage());
         } finally {
             android.opengl.GLES20.glBindFramebuffer(android.opengl.GLES20.GL_FRAMEBUFFER, 0);
         }
+        */
     }
 
     /** First-frame diagnostic on the SurfaceTexture path. SurfaceTexture
@@ -2279,9 +2309,9 @@ public class PanoramicCameraGpu {
             halEffectiveWidth = Math.round(effW);
             halEffectiveHeight = Math.round(effH);
             logger.info(String.format(java.util.Locale.US,
-                "First frame transform: sx=%.4f sy=%.4f tx=%.4f ty=%.4f → "
-                + "effective sampled region ≈ %.0fx%.0f (configured %dx%d)",
-                sx, sy, tx, ty, effW, effH, width, height));
+                    "First frame transform: sx=%.4f sy=%.4f tx=%.4f ty=%.4f → "
+                            + "effective sampled region ≈ %.0fx%.0f (configured %dx%d)",
+                    sx, sy, tx, ty, effW, effH, width, height));
             // Cross-correlate effective dims with the configured pipeline
             // viewport. esco's encoder adapts to whatever the HAL emits;
             // we instead pin a fixed encoder viewport (Seal: 2560×1920),
@@ -2296,23 +2326,23 @@ public class PanoramicCameraGpu {
             float hDeviation = Math.abs(hRatio - 1.0f);
             if (wDeviation > 0.05f || hDeviation > 0.05f) {
                 logger.warn(String.format(java.util.Locale.US,
-                    "ENCODER DIM MISMATCH: HAL effective %.0fx%.0f vs configured "
-                    + "%dx%d (deviation: %.1f%% width, %.1f%% height). The "
-                    + "recorder/streamer/AI lane will rescale content into the "
-                    + "fixed viewport, which may stretch or squish the output. "
-                    + "If this car ships a different mosaic shape, switch "
-                    + "cameraMode (Default vs DiLink 4) or update the camera "
-                    + "profile's panoWidth/panoHeight to match.",
-                    effW, effH, width, height,
-                    wDeviation * 100f, hDeviation * 100f));
+                        "ENCODER DIM MISMATCH: HAL effective %.0fx%.0f vs configured "
+                                + "%dx%d (deviation: %.1f%% width, %.1f%% height). The "
+                                + "recorder/streamer/AI lane will rescale content into the "
+                                + "fixed viewport, which may stretch or squish the output. "
+                                + "If this car ships a different mosaic shape, switch "
+                                + "cameraMode (Default vs DiLink 4) or update the camera "
+                                + "profile's panoWidth/panoHeight to match.",
+                        effW, effH, width, height,
+                        wDeviation * 100f, hDeviation * 100f));
             }
             if (Math.abs(Math.abs(sx) - 1.0f) > 0.01f
                     || Math.abs(Math.abs(sy) - 1.0f) > 0.01f) {
                 logger.warn("HAL is delivering a CROPPED region of the surface — "
-                    + "if you expected a 4-quadrant 5120x960 strip and effective "
-                    + "is closer to half on either axis, the HAL is in 2x2 "
-                    + "mosaic mode (or some non-strip layout). Consider trying "
-                    + "a different previewIndex (cameraSurfaceMode) or cameraId.");
+                        + "if you expected a 4-quadrant 5120x960 strip and effective "
+                        + "is closer to half on either axis, the HAL is in 2x2 "
+                        + "mosaic mode (or some non-strip layout). Consider trying "
+                        + "a different previewIndex (cameraSurfaceMode) or cameraId.");
             }
         } catch (Throwable t) {
             logger.warn("First-frame transform-matrix probe failed: " + t.getMessage());
@@ -2347,7 +2377,7 @@ public class PanoramicCameraGpu {
             try { hwTs = image.getTimestamp(); } catch (Throwable ignored) {}
             if (!ptsSourceLogged) {
                 logger.info("PTS source probe: first hwTs=" + hwTs + "ns, mode="
-                    + (hwTs > 0 ? "hwClock(advance-checked)" : "hwClock(zero-on-first-frame)"));
+                        + (hwTs > 0 ? "hwClock(advance-checked)" : "hwClock(zero-on-first-frame)"));
                 ptsSourceLogged = true;
             }
             long advance = hwTs - lastHwTsSeenNs;
@@ -2434,7 +2464,7 @@ public class PanoramicCameraGpu {
             hwBuffer = image.getHardwareBuffer();
             if (hwBuffer == null) return false;
             boolean bound = HardwareBufferTextureBinder
-                .bindHardwareBufferToTextureNative(hwBuffer, windshieldTextureId);
+                    .bindHardwareBufferToTextureNative(hwBuffer, windshieldTextureId);
             if (!bound) return false;
             releasePreviousBoundWindshieldImage();
             windshieldBoundImage = image;
@@ -2477,10 +2507,10 @@ public class PanoramicCameraGpu {
         if (now - lastIrDiagLogMs < STATS_INTERVAL_MS) return;
         lastIrDiagLogMs = now;
         logger.info(String.format(
-            "IR-diag: fire=%d acqOk=%d acqNull=%d bindFail=%d",
-            irFireCount, irAcquireOkCount, irAcquireNullCount, irBindFailCount));
+                "IR-diag: fire=%d acqOk=%d acqNull=%d bindFail=%d",
+                irFireCount, irAcquireOkCount, irAcquireNullCount, irBindFailCount));
     }
-    
+
     /**
      * Main render loop - distributes frames to recording and AI lanes.
      */
@@ -2500,14 +2530,10 @@ public class PanoramicCameraGpu {
             synchronized (frameSync) {
                 if (!imagePending && !stFramePending) {
                     try {
-                        // FIX H4: 250 ms timeout (was 100 ms). The watchdog
-                        // owns frame-stall detection at its own 5 s cadence;
-                        // the timeout here only paces how often we re-check
-                        // running.get(). 100 ms produced ~10 idle wakeups/s
-                        // when the camera HAL was paused (e.g. during ACC-off
-                        // teardown latency); 250 ms cuts that to ~4/s with no
-                        // user-visible behaviour change.
-                        frameSync.wait(250);
+                        // OTIMIZAÇÃO H4: Timeout reduzido para 50 ms. Impede que a thread
+                        // durma por muito tempo caso o sinal do HAL seja perdido ou chegue
+                        // logo após o início do wait, mantendo o frame pacing fluido.
+                        frameSync.wait(50);
                     } catch (InterruptedException e) {
                         // Continue
                     }
@@ -2566,7 +2592,7 @@ public class PanoramicCameraGpu {
             lastFrameTime = System.currentTimeMillis();
             firstFrameReceived = true;
             consecutiveContentionStalls = 0;  // Frames flowing — clear stall counter
-            
+
             // SOTA: Full-matrix auto-probe at frame 15 (~2 sec).
             // Sweeps camera IDs 0-5 × surface modes 0-5 to find the first
             // combination that produces panoramic image data. Each combo gets
@@ -2582,23 +2608,23 @@ public class PanoramicCameraGpu {
                     }
                     int currentId = cameraIdOverride >= 0 ? cameraIdOverride : PHYSICAL_CAMERA_ID;
                     boolean isPanoramic = width >= 5000;
-                    logger.info("Camera ID " + currentId + " probe: " + 
-                        (hasData ? "HAS DATA" : "BLACK") +
-                        " | resolution=" + width + "x" + height +
-                        " | type=" + (isPanoramic ? "PANORAMIC" : "SINGLE") +
-                        " | surfaceMode=" + cameraSurfaceMode);
-                    
+                    logger.info("Camera ID " + currentId + " probe: " +
+                            (hasData ? "HAS DATA" : "BLACK") +
+                            " | resolution=" + width + "x" + height +
+                            " | type=" + (isPanoramic ? "PANORAMIC" : "SINGLE") +
+                            " | surfaceMode=" + cameraSurfaceMode);
+
                     if (hasData && isPanoramic) {
                         // Track this camera as having real data (for fallback if strip check fails)
                         lastDataCameraId = currentId;
-                        
+
                         // During auto-probe: accept the first camera with non-black panoramic data.
                         // The 5120x960 resolution IS the panoramic strip identifier on BYD — no other
                         // camera output uses this resolution with real image data. The luma-based
                         // strip check was producing false negatives in low-light/uniform scenes.
                         if (autoProbeCameras) {
-                            logger.info("Auto-probe: SELECTED camera ID " + currentId + 
-                                " (panoramic data confirmed, surfaceMode=" + cameraSurfaceMode + ")");
+                            logger.info("Auto-probe: SELECTED camera ID " + currentId +
+                                    " (panoramic data confirmed, surfaceMode=" + cameraSurfaceMode + ")");
                             autoProbeCameras = false;
                             probeStartId = -1;
                             probeComplete = true;
@@ -2627,14 +2653,14 @@ public class PanoramicCameraGpu {
                         // Instead, schedule a second check at frame 50 (~5s). If still black
                         // at that point, the saved config is genuinely wrong and we re-probe.
                         logger.warn("Frame 15 readback BLACK for cam=" + currentId +
-                            ", surfaceMode=" + cameraSurfaceMode +
-                            " — will recheck at frame 50 before deciding");
+                                ", surfaceMode=" + cameraSurfaceMode +
+                                " — will recheck at frame 50 before deciding");
                     }
                 } catch (Exception e) {
                     logger.warn("Camera probe failed: " + e.getMessage());
                 }
             }
-            
+
             // Frame 50 recheck (~5s): if frame 15 was black, verify again.
             // By frame 50 the HAL has definitely warmed up. If still black, the saved
             // config is genuinely wrong (BmmCameraInfo returned incorrect ID).
@@ -2651,7 +2677,7 @@ public class PanoramicCameraGpu {
                     if (!hasData) {
                         int currentId = cameraIdOverride >= 0 ? cameraIdOverride : PHYSICAL_CAMERA_ID;
                         logger.warn("Frame 50 STILL BLACK for cam=" + currentId +
-                            " — saved config is wrong, starting re-probe");
+                                " — saved config is wrong, starting re-probe");
                         autoProbeCameras = true;
                         probeComplete = false;
                         probeNextCameraId = 0;
@@ -2668,20 +2694,20 @@ public class PanoramicCameraGpu {
                         probeComplete = true;
                         try {
                             org.json.JSONObject existingCam = com.overdrive.app.config.UnifiedConfigManager
-                                .loadConfig().optJSONObject("camera");
+                                    .loadConfig().optJSONObject("camera");
                             boolean hasManualOverride = existingCam != null && existingCam.optBoolean("manualOverride", false);
                             int savedId = existingCam != null ? existingCam.optInt("probedCameraId", -1) : -1;
-                            
+
                             // Only write back if there's no manual override, or if the manual override
                             // matches what we're currently running (user's choice is already applied)
                             if (!hasManualOverride || savedId == currentId) {
                                 com.overdrive.app.camera.CameraConfigResolver.persistPanoramicProbe(
-                                    currentId,
-                                    cameraSurfaceMode,
-                                    width,
-                                    height,
-                                    true,
-                                    false);
+                                        currentId,
+                                        cameraSurfaceMode,
+                                        width,
+                                        height,
+                                        true,
+                                        false);
                             } else {
                                 logger.info("Skipping config write — manual override exists (saved=" + savedId + ", running=" + currentId + ")");
                             }
@@ -2770,11 +2796,11 @@ public class PanoramicCameraGpu {
                 if (windshieldStarted && windshieldFrameReady
                         && windshieldLastFrameMs > 0
                         && (System.currentTimeMillis() - windshieldLastFrameMs)
-                            > WINDSHIELD_STALL_THRESHOLD_MS) {
+                        > WINDSHIELD_STALL_THRESHOLD_MS) {
                     long stalledMs = System.currentTimeMillis() - windshieldLastFrameMs;
                     logger.warn("Windshield feed stalled " + stalledMs
-                        + "ms (frames=" + windshieldFrameCount
-                        + ") — falling back to 360 front + scheduling reopen");
+                            + "ms (frames=" + windshieldFrameCount
+                            + ") — falling back to 360 front + scheduling reopen");
                     // Stop trusting the stale frame immediately.
                     windshieldFrameReady = false;
                     // Throttled reopen: close + restart on this (GL) thread.
@@ -2810,7 +2836,7 @@ public class PanoramicCameraGpu {
                 recorderStrideCounter++;
                 if (drawThisFrame) {
                     localRecorder.drawFrame(cameraTextureId, windshieldTextureId,
-                        windshieldStarted && windshieldFrameReady, currentFrameTimestampNs);
+                            windshieldStarted && windshieldFrameReady, currentFrameTimestampNs);
 
                     // CRITICAL: Drain encoder immediately after frame submission
                     // This prevents eglSwapBuffers from blocking when encoder buffers fill up
@@ -2865,7 +2891,9 @@ public class PanoramicCameraGpu {
                         logger.error("Encoder reinit failed: " + reinitEx.getMessage());
                         // If reinit fails, force process restart — EGL context is likely corrupt
                         logger.error("CRITICAL: Encoder reinit failed, forcing process restart");
-                        try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+                        synchronized (frameSync) {
+                            try { frameSync.wait(100); } catch (InterruptedException ignored) {}
+                        }
                         System.exit(0);
                     } finally {
                         restartInProgress.set(false);
@@ -3012,8 +3040,13 @@ public class PanoramicCameraGpu {
             }
             AiLaneGl localAiLane = aiLaneGl;
             if (localAiLane != null && localAiLane.isRunning() && aiLaneNeeded) {
-                android.opengl.GLES20.glFlush();
-                localAiLane.notifyFrame(cameraFrameSeq.get());
+                // OTIMIZAÇÃO: Executa o glFlush apenas no frame em que a IA realmente
+                // realizará a leitura de pixels (modulo check), reduzindo chamadas
+                // de sistema IOCTL para o driver Adreno desnecessárias.
+                if (cameraFrameSeq.get() % AI_READBACK_FRAME_MODULO == 0) {
+                    android.opengl.GLES20.glFlush();
+                    localAiLane.notifyFrame(cameraFrameSeq.get());
+                }
             }
 
             // Per-stage timing roll-up. Track only the worst frame per 30 s
@@ -3089,7 +3122,7 @@ public class PanoramicCameraGpu {
             }
         }
     }
-    
+
     /**
      * Verifies that the camera is producing a real panoramic strip (4 distinct views)
      * rather than a single camera stretched or AVM bird's-eye view.
@@ -3120,13 +3153,13 @@ public class PanoramicCameraGpu {
             }
         }
         for (int q = 0; q < 4; q++) { if (qCnt[q] > 0) qLuma[q] /= qCnt[q]; }
-        
+
         // Primary check: luma difference between quadrant pairs.
         // A real panoramic strip has 4 cameras showing different scenes.
         int diffPairs = 0;
         for (int i = 0; i < 4; i++) for (int j = i+1; j < 4; j++) if (Math.abs(qLuma[i]-qLuma[j]) > 15) diffPairs++;
         boolean isStrip = diffPairs >= 2;
-        
+
         // Secondary check: if all quadrants have real (non-black) data with internal
         // variance, this is a real camera feed even if the scenes look similar.
         // This handles the common case of a parked car in a garage/at night where
@@ -3145,11 +3178,11 @@ public class PanoramicCameraGpu {
             // min/max patterns across all quadrants).
             if (quadrantsWithVariance >= 3) {
                 isStrip = true;
-                logger.info("Strip accepted via secondary check: " + quadrantsWithVariance + 
-                    " quadrants with variance, " + totalNonBlack + "/64 non-black pixels");
+                logger.info("Strip accepted via secondary check: " + quadrantsWithVariance +
+                        " quadrants with variance, " + totalNonBlack + "/64 non-black pixels");
             }
         }
-        
+
         logger.info("Strip check: Q0=" + qLuma[0] + " Q1=" + qLuma[1] + " Q2=" + qLuma[2] + " Q3=" + qLuma[3] +
                 " diffPairs=" + diffPairs + " → " + (isStrip ? "STRIP" : "NOT_STRIP"));
         return isStrip;
@@ -3158,7 +3191,7 @@ public class PanoramicCameraGpu {
     /**
      * SOTA: Advance to the next camera ID during probe.
      * Surface mode 0 is confirmed working on all tested models — only probe camera IDs 0-5.
-     * 
+     *
      * @param skipId Camera ID to skip (the one we just tested). -1 to start fresh.
      */
     private void advanceProbeToNext(int skipId) {
@@ -3174,41 +3207,43 @@ public class PanoramicCameraGpu {
                 cameraCoordinator.resetEventCallbackState();
             }
         }
-        
+
         // CRITICAL: Let the BYD camera HAL settle between close and next open.
         // Without this delay, rapid camera cycling overwhelms the HAL service
         // and triggers a system watchdog reboot.
-        try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
-        
+        try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+
         // Probe camera IDs 0-5 with surface mode 0 (confirmed working on all models)
         boolean found = false;
         while (probeNextCameraId <= MAX_CAMERA_ID) {
             int tryId = probeNextCameraId;
             probeNextCameraId++;
-            
+
             // Skip the ID we just tested
             if (tryId == skipId) {
                 continue;
             }
-            
-            logger.info("Auto-probe: trying camera ID " + tryId + 
-                " [" + (tryId + 1) + "/" + (MAX_CAMERA_ID + 1) + "]");
-            
+
+            logger.info("Auto-probe: trying camera ID " + tryId +
+                    " [" + (tryId + 1) + "/" + (MAX_CAMERA_ID + 1) + "]");
+
             cameraIdOverride = tryId;
             cameraSurfaceMode = 0;  // Surface mode 0 confirmed working
             frameCounter = 0;
             lastStatsFrameCount = 0;
             lastGlThreadHeartbeat = System.currentTimeMillis();
-            
+
             // Recreate SurfaceTexture — HAL won't deliver continuous frames
             // to a Surface previously connected to a different camera/mode
             recreateCameraSurface();
             lastGlThreadHeartbeat = System.currentTimeMillis();
-            
+
             try {
                 // Brief pause before opening next camera — HAL needs time to release resources
-                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-                
+                synchronized (frameSync) {
+                    try { frameSync.wait(1000); } catch (InterruptedException ignored) {}
+                }
+
                 startCamera();
                 // Setup event callback (only for AVMCamera path — binder service handles its own events)
                 if (cameraCoordinator != null && cameraObj != null) {
@@ -3221,17 +3256,19 @@ public class PanoramicCameraGpu {
                 logger.info("Auto-probe: camera ID " + tryId + " failed to open: " + e.getMessage());
                 cameraObj = null;
                 // Delay before trying next combo to avoid HAL overload
-                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                synchronized (frameSync) {
+                    try { frameSync.wait(1000); } catch (InterruptedException ignored) {}
+                }
                 continue;
             }
         }
-        
+
         if (!found) {
             // If we found at least one camera with data during probe, switch back to it.
             // This prevents the "probe failed" state from leaving us on a black camera.
             if (lastDataCameraId >= 0 && lastDataCameraId != cameraIdOverride) {
-                logger.info("Auto-probe: no verified strip found, falling back to camera ID " + 
-                    lastDataCameraId + " (last known data source)");
+                logger.info("Auto-probe: no verified strip found, falling back to camera ID " +
+                        lastDataCameraId + " (last known data source)");
                 cameraIdOverride = lastDataCameraId;
                 cameraSurfaceMode = 0;
                 frameCounter = 0;
@@ -3251,20 +3288,20 @@ public class PanoramicCameraGpu {
                 // Persist this as a fallback so next restart doesn't re-probe
                 try {
                     com.overdrive.app.camera.CameraConfigResolver.persistPanoramicProbe(
-                        lastDataCameraId,
-                        0,
-                        width,
-                        height,
-                        true,
-                        true);
+                            lastDataCameraId,
+                            0,
+                            width,
+                            height,
+                            true,
+                            true);
                     logger.info("Persisted fallback camera ID " + lastDataCameraId + " for next launch");
                 } catch (Exception ex) {
                     logger.warn("Failed to persist fallback camera config: " + ex.getMessage());
                 }
             } else {
-                logger.error("Auto-probe: exhausted all " + 
-                    (MAX_CAMERA_ID + 1) + 
-                    " camera IDs — no working panoramic camera found");
+                logger.error("Auto-probe: exhausted all " +
+                        (MAX_CAMERA_ID + 1) +
+                        " camera IDs — no working panoramic camera found");
             }
             autoProbeCameras = false;
             probeStartId = -1;
@@ -3278,7 +3315,7 @@ public class PanoramicCameraGpu {
 
     /**
      * Starts the watchdog thread that monitors GL thread health.
-     * 
+     *
      * If the GL thread hangs (e.g., eglSwapBuffers blocks), the watchdog
      * will call System.exit(0) to force a process restart, since EGL
      * contexts cannot be recovered from a blocked thread.
@@ -3286,15 +3323,17 @@ public class PanoramicCameraGpu {
     private void startWatchdog() {
         lastGlThreadHeartbeat = System.currentTimeMillis();
         firstFrameReceived = false;
-        
+
         watchdogThread = new Thread(() -> {
             while (running) {
                 try {
-                    Thread.sleep(1000);  // Check every second
-                    
+                    synchronized (frameSync) {
+                        frameSync.wait(1000); // SOTA: Reactive wait instead of blind sleep
+                    }
+
                     long now = System.currentTimeMillis();
                     long timeSinceHeartbeat = now - lastGlThreadHeartbeat;
-                    
+
                     // Use extended timeout until the first camera frame arrives.
                     // The BYD panoramic camera HAL can take 5-8 seconds to deliver
                     // the first frame after open. During this period the GL thread
@@ -3309,42 +3348,42 @@ public class PanoramicCameraGpu {
                     long effectiveTimeout = (firstFrameReceived && !restartInProgress.get())
                             ? GL_THREAD_TIMEOUT_MS
                             : GL_THREAD_WARMUP_TIMEOUT_MS;
-                    
+
                     if (timeSinceHeartbeat > effectiveTimeout) {
-                        logger.error( "CRITICAL: GL thread blocked for " + timeSinceHeartbeat + 
+                        logger.error( "CRITICAL: GL thread blocked for " + timeSinceHeartbeat +
                                 "ms - forcing process restart" +
                                 (firstFrameReceived ? "" : " (during camera warmup)"));
-                        
+
                         // Try to flush logs before exit
                         try {
                             Thread.sleep(100);
                         } catch (InterruptedException ignored) {}
-                        
+
                         // Exit code 0 triggers restart loop in DaemonLauncher wrapper.
                         // EGL contexts cannot be recovered from a blocked thread.
                         System.exit(0);
                     }
-                    
+
                     // SOTA: Frame health monitor — detect stalled camera feed
                     // If GL thread is alive but no new frames for FRAME_STALL_THRESHOLD_MS,
                     // the camera HAL may be starved or dead.
                     // Decision is contention-aware: if native app is active, use longer
                     // threshold and require consecutive stalls before yielding.
-                    if (!cameraYielded && lastFrameTime > 0 && 
-                        timeSinceHeartbeat < GL_THREAD_TIMEOUT_MS) {
+                    if (!cameraYielded && lastFrameTime > 0 &&
+                            timeSinceHeartbeat < GL_THREAD_TIMEOUT_MS) {
                         long timeSinceFrame = now - lastFrameTime;
-                        
+
                         // Use longer threshold when native app is active — transient
                         // CPU/IO stalls shouldn't trigger a yield that interrupts recording
-                        boolean nativeActive = cameraCoordinator != null && 
-                            cameraCoordinator.isNativeAppActive();
-                        long stallThreshold = nativeActive 
-                            ? FRAME_STALL_CONTENTION_THRESHOLD_MS 
-                            : FRAME_STALL_THRESHOLD_MS;
-                        
+                        boolean nativeActive = cameraCoordinator != null &&
+                                cameraCoordinator.isNativeAppActive();
+                        long stallThreshold = nativeActive
+                                ? FRAME_STALL_CONTENTION_THRESHOLD_MS
+                                : FRAME_STALL_THRESHOLD_MS;
+
                         if (timeSinceFrame > stallThreshold) {
                             logger.warn("FRAME STALL: No frames for " + timeSinceFrame + "ms" +
-                                (nativeActive ? " (native app active)" : ""));
+                                    (nativeActive ? " (native app active)" : ""));
                             // Reset lastFrameTime to prevent repeated triggers
                             lastFrameTime = now;
 
@@ -3371,13 +3410,13 @@ public class PanoramicCameraGpu {
                                     consecutiveContentionStalls++;
                                     if (consecutiveContentionStalls >= CONTENTION_STALL_COUNT_TO_YIELD) {
                                         logger.warn("Consecutive contention stalls: " +
-                                            consecutiveContentionStalls + " — yielding camera");
+                                                consecutiveContentionStalls + " — yielding camera");
                                         consecutiveContentionStalls = 0;
                                         cameraCoordinator.onFrameStallDetected();
                                     } else {
                                         logger.info("Contention stall " + consecutiveContentionStalls +
-                                            "/" + CONTENTION_STALL_COUNT_TO_YIELD +
-                                            " — waiting for more evidence before yielding");
+                                                "/" + CONTENTION_STALL_COUNT_TO_YIELD +
+                                                " — waiting for more evidence before yielding");
                                     }
                                 } else {
                                     // No native app — this is a HAL issue, restart camera
@@ -3398,36 +3437,36 @@ public class PanoramicCameraGpu {
                             consecutiveContentionStalls = 0;
                         }
                     }
-                    
+
                 } catch (InterruptedException e) {
                     break;
                 }
             }
         }, "GL-Watchdog");
-        
+
         watchdogThread.setDaemon(true);
         watchdogThread.start();
-        
+
         logger.info( "GL thread watchdog started (timeout=" + GL_THREAD_TIMEOUT_MS + "ms, " +
-            "warmupTimeout=" + GL_THREAD_WARMUP_TIMEOUT_MS + "ms, " +
-            "frameStall=" + FRAME_STALL_THRESHOLD_MS + "ms, " +
-            "cameraId=" + (cameraIdOverride >= 0 ? cameraIdOverride : PHYSICAL_CAMERA_ID) + ", " +
-            "probe=" + (autoProbeCameras ? "ACTIVE" : "OFF") + ")");
+                "warmupTimeout=" + GL_THREAD_WARMUP_TIMEOUT_MS + "ms, " +
+                "frameStall=" + FRAME_STALL_THRESHOLD_MS + "ms, " +
+                "cameraId=" + (cameraIdOverride >= 0 ? cameraIdOverride : PHYSICAL_CAMERA_ID) + ", " +
+                "probe=" + (autoProbeCameras ? "ACTIVE" : "OFF") + ")");
     }
-    
+
     /**
      * SOTA: Yields the camera to the native BYD AVM app.
-     * 
+     *
      * Called on GL thread when contention is detected (frame stall while native
      * app is active). Finalizes any active recording FIRST to prevent MP4 corruption,
      * then does a clean camera close.
-     * 
+     *
      * The GL render loop continues running but skips frame processing while yielded.
      * Camera is re-acquired when onCloseCamera fires from IBYDCameraService.
      */
     private void yieldCameraInternal() {
         logger.info("Yielding camera to native AVM app...");
-        
+
         // CRITICAL: Finalize active recording BEFORE closing camera.
         if (yieldListener != null) {
             try {
@@ -3437,12 +3476,12 @@ public class PanoramicCameraGpu {
                 logger.warn("Pre-yield callback error: " + e.getMessage());
             }
         }
-        
+
         // Detach streaming components to stop drainer threads
         if (streamScaler != null || streamEncoder != null) {
             clearStreamingComponents();
         }
-        
+
         // FORTIFY FIX: Stop encoder drainer threads BEFORE closing camera.
         // The drainer thread calls MediaCodec.dequeueOutputBuffer() which internally
         // accesses the camera's SurfaceTexture buffer queue via EGL. If we destroy
@@ -3454,7 +3493,7 @@ public class PanoramicCameraGpu {
         if (streamEncoder != null) {
             streamEncoder.stopDrainerForCameraClose();
         }
-        
+
         if (cameraObj != null) {
             closeCameraForPath(cameraObj);
             cameraObj = null;
@@ -3464,7 +3503,7 @@ public class PanoramicCameraGpu {
             }
             logger.info("Camera yielded — GL pipeline idle, waiting for onCloseCamera");
         }
-        
+
         // Restart drainer threads after camera is closed (for pre-record buffer)
         if (encoder != null) {
             encoder.restartDrainerAfterCameraClose();
@@ -3525,10 +3564,10 @@ public class PanoramicCameraGpu {
         if ((cameraCoordinator != null && cameraCoordinator.isCameraYielded())
                 || cameraYielded) {
             logger.info("Reacquire: yield-in-progress detected on entry "
-                + "(coordYielded="
-                + (cameraCoordinator != null && cameraCoordinator.isCameraYielded())
-                + ", localYielded=" + cameraYielded
-                + ") — aborting attempt; yield poller owns recovery");
+                    + "(coordYielded="
+                    + (cameraCoordinator != null && cameraCoordinator.isCameraYielded())
+                    + ", localYielded=" + cameraYielded
+                    + ") — aborting attempt; yield poller owns recovery");
             return;
         }
         try {
@@ -3541,12 +3580,12 @@ public class PanoramicCameraGpu {
                 Object stale = cameraObj;
                 cameraObj = null;
                 logger.warn("Reacquire (attempt=" + reacquireRetryCount.get()
-                    + "): clearing stale cameraObj before startCamera (always-close)");
+                        + "): clearing stale cameraObj before startCamera (always-close)");
                 try {
                     closeCameraForPath(stale);
                 } catch (Throwable th) {
                     logger.warn("Reacquire: closeCameraForPath on stale obj errored: "
-                        + th.getMessage());
+                            + th.getMessage());
                 }
             }
 
@@ -3568,17 +3607,17 @@ public class PanoramicCameraGpu {
             if (!USE_ESCO_SURFACE_TEXTURE_PATH && consumerNeedsRecreation) {
                 try {
                     logger.info("Reacquire: recreating ImageReader consumer "
-                        + "before reopen (legacy HAL frozen-frame guard)");
+                            + "before reopen (legacy HAL frozen-frame guard)");
                     recreateCameraSurface();
                     consumerNeedsRecreation = false;
                     lastGlThreadHeartbeat = System.currentTimeMillis();
                 } catch (Throwable th) {
                     logger.warn("Reacquire: recreateCameraSurface failed — "
-                        + "proceeding with stale consumer: " + th.getMessage());
+                            + "proceeding with stale consumer: " + th.getMessage());
                 }
             } else if (!USE_ESCO_SURFACE_TEXTURE_PATH) {
                 logger.info("Reacquire: skipping consumer recreate "
-                    + "(consumerNeedsRecreation=false, retry attempt)");
+                        + "(consumerNeedsRecreation=false, retry attempt)");
             }
 
             startCamera();
@@ -3589,8 +3628,8 @@ public class PanoramicCameraGpu {
             // with a null camera handle.
             if (cameraObj == null) {
                 throw new IllegalStateException(
-                    "startCamera returned without opening (cameraObj==null) — "
-                    + "likely yielded gate hit; treating as reacquire failure");
+                        "startCamera returned without opening (cameraObj==null) — "
+                                + "likely yielded gate hit; treating as reacquire failure");
             }
             if (cameraCoordinator != null && cameraObj != null) {
                 cameraCoordinator.resetEventCallbackState();
@@ -3619,7 +3658,7 @@ public class PanoramicCameraGpu {
             int finalCount = reacquireRetryCount.get();
             if (finalCount > 0) {
                 logger.info("Camera re-acquired after " + finalCount
-                    + " retry attempt(s)");
+                        + " retry attempt(s)");
             } else {
                 logger.info("Camera re-acquired after contention yield");
             }
@@ -3637,16 +3676,16 @@ public class PanoramicCameraGpu {
                 try {
                     glHandler.removeCallbacks(staleRetry);
                     logger.info("Reacquire success: cancelled pending "
-                        + "postDelayed retry runnable");
+                            + "postDelayed retry runnable");
                 } catch (Throwable th) {
                     logger.warn("Reacquire success: removeCallbacks errored: "
-                        + th.getMessage());
+                            + th.getMessage());
                 }
             }
         } catch (Exception e) {
             int attemptIdx = reacquireRetryCount.get();
             logger.error("Failed to re-acquire camera (attempt " + attemptIdx
-                + "): " + e.getMessage());
+                    + "): " + e.getMessage());
 
             // audit avc-yield (round 8, finding yield-mid-backoff-cascades-to-exit):
             // belt-and-braces — if a fresh yield landed during the body
@@ -3658,10 +3697,10 @@ public class PanoramicCameraGpu {
             if ((cameraCoordinator != null && cameraCoordinator.isCameraYielded())
                     || cameraYielded) {
                 logger.warn("Reacquire: failure caught while yielded "
-                    + "(coordYielded="
-                    + (cameraCoordinator != null && cameraCoordinator.isCameraYielded())
-                    + ", localYielded=" + cameraYielded
-                    + ") — suppressing retry schedule; yield poller owns recovery");
+                        + "(coordYielded="
+                        + (cameraCoordinator != null && cameraCoordinator.isCameraYielded())
+                        + ", localYielded=" + cameraYielded
+                        + ") — suppressing retry schedule; yield poller owns recovery");
                 return;
             }
 
@@ -3672,16 +3711,16 @@ public class PanoramicCameraGpu {
                 // listener) already reset to 0, our CAS fails — that's OK,
                 // the reset path will own scheduling.
                 boolean bumped = reacquireRetryCount.compareAndSet(
-                    attemptIdx, attemptIdx + 1);
+                        attemptIdx, attemptIdx + 1);
                 if (!bumped) {
                     logger.warn("Reacquire: CAS bump failed (attempt=" + attemptIdx
-                        + ", current=" + reacquireRetryCount.get()
-                        + ") — concurrent reset detected, skipping retry schedule");
+                            + ", current=" + reacquireRetryCount.get()
+                            + ") — concurrent reset detected, skipping retry schedule");
                     return;
                 }
                 logger.warn("Reacquire scheduling backoff retry "
-                    + reacquireRetryCount.get() + "/" + REACQUIRE_RETRY_DELAYS_MS.length
-                    + " in " + delay + "ms");
+                        + reacquireRetryCount.get() + "/" + REACQUIRE_RETRY_DELAYS_MS.length
+                        + " in " + delay + "ms");
                 if (glHandler != null && running) {
                     // audit avc-yield (round 7, finding pending-retry-not-cancelled):
                     // capture epoch snapshot + store runnable handle so a
@@ -3695,10 +3734,10 @@ public class PanoramicCameraGpu {
                             int currentEpoch = pendingReacquireEpoch.get();
                             if (currentEpoch != scheduledEpoch) {
                                 logger.info("Reacquire backoff retry: epoch "
-                                    + "mismatch (scheduled=" + scheduledEpoch
-                                    + ", current=" + currentEpoch
-                                    + ") — superseded by poller/success path,"
-                                    + " skipping stale retry");
+                                        + "mismatch (scheduled=" + scheduledEpoch
+                                        + ", current=" + currentEpoch
+                                        + ") — superseded by poller/success path,"
+                                        + " skipping stale retry");
                                 return;
                             }
                             // Clear our own handle before running so a peer
@@ -3713,7 +3752,7 @@ public class PanoramicCameraGpu {
                     glHandler.postDelayed(retryRunnable, delay);
                 } else {
                     logger.warn("Reacquire: glHandler null or pipeline stopped — "
-                        + "cannot schedule retry");
+                            + "cannot schedule retry");
                 }
                 // Also restart poller as belt-and-braces last-ditch path.
                 // Audit notes this likely won't fire (edge already consumed),
@@ -3736,15 +3775,15 @@ public class PanoramicCameraGpu {
                     startYieldPoller();
                 } catch (Throwable th) {
                     logger.warn("Reacquire: poller fallback start errored: "
-                        + th.getMessage());
+                            + th.getMessage());
                 }
             } else {
                 // All retries exhausted — give up and let the watchdog
                 // wrapper respawn the daemon. Mirrors line 2400/2767 GL
                 // watchdog escape hatch.
                 logger.error("Reacquire: all "
-                    + REACQUIRE_RETRY_DELAYS_MS.length
-                    + " retries exhausted — exiting daemon for wrapper respawn");
+                        + REACQUIRE_RETRY_DELAYS_MS.length
+                        + " retries exhausted — exiting daemon for wrapper respawn");
                 reacquireRetryCount.set(0);
                 try {
                     System.exit(0);
@@ -3758,7 +3797,7 @@ public class PanoramicCameraGpu {
                 // killProcess(myPid) if even halt is blocked.
                 try {
                     logger.warn("Reacquire: System.exit(0) returned — "
-                        + "invoking Runtime.halt(0) hard fallback");
+                            + "invoking Runtime.halt(0) hard fallback");
                     Runtime.getRuntime().halt(0);
                 } catch (Throwable th) {
                     logger.warn("Runtime.halt(0) failed: " + th.getMessage());
@@ -3785,14 +3824,16 @@ public class PanoramicCameraGpu {
         if (existing != null && existing.isAlive()) return;
         Thread t = new Thread(() -> {
             logger.info("Yield poller started — will check native app every "
-                + YIELD_POLL_INTERVAL_MS + "ms");
+                    + YIELD_POLL_INTERVAL_MS + "ms");
             while (cameraYielded && running && !Thread.currentThread().isInterrupted()) {
                 try {
-                    Thread.sleep(YIELD_POLL_INTERVAL_MS);
+                    synchronized (frameSync) {
+                        frameSync.wait(YIELD_POLL_INTERVAL_MS); // SOTA: Reactive wait
+                    }
                 } catch (InterruptedException ie) {
                     return;
                 }
-                if (!cameraYielded) return;
+                if (!cameraYielded || !running) return;
                 try {
                     if (cameraCoordinator != null) {
                         // checkNativeAppActive is the live polling path. When
@@ -3862,12 +3903,12 @@ public class PanoramicCameraGpu {
         // immediately instead of waiting for ACC OFF→ON.
         if (cameraCoordinator != null && cameraCoordinator.isCameraYielded()) {
             logger.warn("Restart: clearing sticky coordinator yielded flag "
-                + "before reopen (avoid silent startCamera no-op)");
+                    + "before reopen (avoid silent startCamera no-op)");
             try {
                 cameraCoordinator.clearYieldedForRestart();
             } catch (Throwable th) {
                 logger.warn("Restart: clearYieldedForRestart errored: "
-                    + th.getMessage());
+                        + th.getMessage());
             }
         }
 
@@ -3881,13 +3922,13 @@ public class PanoramicCameraGpu {
                     logger.warn("Pre-restart callback error: " + e.getMessage());
                 }
             }
-            
+
             // Detach streaming components
             if (streamScaler != null || streamEncoder != null) {
                 clearStreamingComponents();
                 logger.info("Pre-restart: streaming components detached");
             }
-            
+
             // FORTIFY FIX: Stop encoder drainer threads BEFORE closing camera.
             if (encoder != null) {
                 encoder.stopDrainerForCameraClose();
@@ -3895,7 +3936,7 @@ public class PanoramicCameraGpu {
             if (streamEncoder != null) {
                 streamEncoder.stopDrainerForCameraClose();
             }
-            
+
             // Close with proper cleanup + notify service
             if (cameraObj != null) {
                 closeCameraForPath(cameraObj);
@@ -3908,20 +3949,20 @@ public class PanoramicCameraGpu {
 
             // Brief pause to let HAL settle
             Thread.sleep(500);
-            
+
             // Update heartbeat so watchdog doesn't kill us during restart
             lastGlThreadHeartbeat = System.currentTimeMillis();
-            
+
             // CRITICAL: Recreate SurfaceTexture before reopening camera.
             // The BYD HAL won't deliver continuous frames to a Surface that was
             // previously connected to a different camera instance — only the first
             // frame arrives, then the stream freezes. This matches the fix already
             // present in the auto-probe path in renderLoop().
             recreateCameraSurface();
-            
+
             // Update heartbeat again after surface recreation
             lastGlThreadHeartbeat = System.currentTimeMillis();
-            
+
             // CRITICAL FIX: Open camera on a separate thread with a timeout.
             // startCamera() calls into the BYD HAL which can block indefinitely
             // if the HAL is in a bad state. Running it on the GL thread causes
@@ -3948,17 +3989,19 @@ public class PanoramicCameraGpu {
 
             // Wait up to 2 seconds for camera to open, updating heartbeat periodically
             long openStart = System.currentTimeMillis();
-            long openTimeout = 2000;
+            long openTimeout = 3000;
             while (cameraOpenThread.isAlive() &&
-                   (System.currentTimeMillis() - openStart) < openTimeout) {
-                Thread.sleep(200);
+                    (System.currentTimeMillis() - openStart) < openTimeout) {
+                synchronized (frameSync) {
+                    try { frameSync.wait(200); } catch (InterruptedException ignored) {}
+                }
                 lastGlThreadHeartbeat = System.currentTimeMillis();
             }
 
             if (!openSuccess[0]) {
                 if (cameraOpenThread.isAlive()) {
                     logger.warn("Camera open timed out after " + openTimeout +
-                        "ms — will retry on next stall cycle");
+                            "ms — will retry on next stall cycle");
                     // Don't interrupt — let it finish in background, watchdog won't kill us
                     // because heartbeat is still updating
                     return;
@@ -3973,24 +4016,24 @@ public class PanoramicCameraGpu {
                 // the restart succeeded with a dead camera handle.
                 if (cameraObj == null) {
                     throw new IllegalStateException(
-                        "startCamera returned without opening (cameraObj==null) — "
-                        + "treating restart as failed");
+                            "startCamera returned without opening (cameraObj==null) — "
+                                    + "treating restart as failed");
                 }
             }
-            
+
             // Update heartbeat after successful open
             lastGlThreadHeartbeat = System.currentTimeMillis();
-            
+
             // Restart encoder drainer now that camera is open again
             if (encoder != null) {
                 encoder.restartDrainerAfterCameraClose();
             }
-            
+
             // Re-register event callback
             if (cameraCoordinator != null && cameraObj != null) {
                 cameraCoordinator.setupEventCallback(cameraObj);
             }
-            
+
             // Resume recording/surveillance after camera restart
             if (yieldListener != null) {
                 try {
@@ -4000,9 +4043,9 @@ public class PanoramicCameraGpu {
                     logger.warn("Post-restart callback error: " + e.getMessage());
                 }
             }
-            
+
             logger.info("Camera restarted successfully after error");
-            
+
         } catch (Exception e) {
             logger.error("Camera restart failed: " + e.getMessage());
             // If restart fails, the watchdog will eventually kill the process
@@ -4018,6 +4061,12 @@ public class PanoramicCameraGpu {
     public void stop() {
         logger.info( "Stopping GPU camera pipeline...");
         running = false;
+        
+        // SOTA: Wake up all waiting threads (Watchdog, Poller, Startup loop)
+        // for immediate shutdown without waiting for timeouts.
+        synchronized (frameSync) {
+            frameSync.notifyAll();
+        }
 
         // Stop watchdog
         if (watchdogThread != null) {
@@ -4027,7 +4076,7 @@ public class PanoramicCameraGpu {
 
         // Stop yield poller (if a yield is in-flight when stop() races in)
         stopYieldPoller();
-        
+
         // FORTIFY FIX: Stop encoder drainer threads BEFORE closing camera
         if (encoder != null) {
             encoder.stopDrainerForCameraClose();
@@ -4035,7 +4084,7 @@ public class PanoramicCameraGpu {
         if (streamEncoder != null) {
             streamEncoder.stopDrainerForCameraClose();
         }
-        
+
         // Close camera with proper cleanup + notify service
         if (cameraObj != null) {
             closeCameraForPath(cameraObj);
@@ -4044,7 +4093,7 @@ public class PanoramicCameraGpu {
                 cameraCoordinator.notifyPosCloseCamera();
             }
         }
-        
+
         // Unregister from IBYDCameraService AFTER notifying posCloseCamera.
         // Must keep the service proxy alive until the close notification is sent,
         // otherwise the native camera app never receives the "camera released" signal
@@ -4052,12 +4101,12 @@ public class PanoramicCameraGpu {
         if (cameraCoordinator != null) {
             cameraCoordinator.unregister();
         }
-        
+
         // Cleanup on GL thread
         if (glHandler != null) {
             glHandler.post(this::releaseGl);
         }
-        
+
         // Stop GL thread
         if (glThread != null) {
             glThread.quitSafely();
@@ -4068,7 +4117,7 @@ public class PanoramicCameraGpu {
             }
             glThread = null;
         }
-        
+
         logger.info( "GPU camera pipeline stopped");
     }
     /**
@@ -4082,7 +4131,7 @@ public class PanoramicCameraGpu {
      */
     /**
      * Releases and reopens the AVMCamera without tearing down the GL pipeline.
-     * 
+     *
      * During ACC OFF→ON, the daemon holds the camera from surveillance mode.
      * The BYD native camera app starts on ACC ON but can't get frames.
      * Releasing briefly lets the native app grab the primary slot, then we
@@ -4223,12 +4272,14 @@ public class PanoramicCameraGpu {
         long remaining = totalMs;
         while (remaining > 0 && running) {
             long chunk = Math.min(step, remaining);
-            Thread.sleep(chunk);
+            synchronized (frameSync) {
+                frameSync.wait(chunk); // SOTA: Reactive wait
+            }
             lastGlThreadHeartbeat = System.currentTimeMillis();
             remaining -= chunk;
         }
     }
-    
+
     /**
      * Releases OpenGL resources.
      */
@@ -4290,27 +4341,43 @@ public class PanoramicCameraGpu {
             windshieldTextureId = 0;
         }
 
+        // OTIMIZAÇÃO: Limpeza explícita dos recursos alocados pelo probe.
+        // Evita vazamento de memória gráfica (OOM) no driver kgsl da Adreno
+        // após múltiplos ciclos de reinicialização.
+        if (probeFbo != 0) {
+            android.opengl.GLES20.glDeleteFramebuffers(1, new int[]{probeFbo}, 0);
+            probeFbo = 0;
+        }
+        if (probeColorTex != 0) {
+            android.opengl.GLES20.glDeleteTextures(1, new int[]{probeColorTex}, 0);
+            probeColorTex = 0;
+        }
+        if (probeProgram != 0) {
+            android.opengl.GLES20.glDeleteProgram(probeProgram);
+            probeProgram = 0;
+        }
+
         if (dummySurface != null) {
             eglCore.destroySurface(dummySurface);
             dummySurface = null;
         }
-        
+
         if (eglCore != null) {
             eglCore.release();
             eglCore = null;
         }
-        
+
         logger.info( "OpenGL resources released");
     }
-    
+
     /**
      * Sets streaming components for parallel GPU path.
-     * 
+     *
      * @param streamScaler GPU stream scaler
      * @param streamEncoder Stream encoder
      */
     public void setStreamingComponents(com.overdrive.app.streaming.GpuStreamScaler streamScaler,
-                                      HardwareEventRecorderGpu streamEncoder) {
+                                       HardwareEventRecorderGpu streamEncoder) {
         this.streamScaler = streamScaler;
         this.streamEncoder = streamEncoder;
     }
@@ -4387,7 +4454,7 @@ public class PanoramicCameraGpu {
             handler.post(this::updateWindshieldCameraOnGlThread);
         }
         logger.info("Dashcam windshield source "
-            + (this.windshieldEnabled ? ("enabled (id=" + cameraId + ")") : "disabled"));
+                + (this.windshieldEnabled ? ("enabled (id=" + cameraId + ")") : "disabled"));
     }
 
     /**
@@ -4398,19 +4465,19 @@ public class PanoramicCameraGpu {
         this.streamScaler = null;
         this.streamEncoder = null;
     }
-    
+
     /**
      * Gets the GL thread handler for posting operations.
-     * 
+     *
      * @return Handler for GL thread
      */
     public Handler getGlHandler() {
         return glHandler;
     }
-    
+
     /**
      * Checks if the camera is running.
-     * 
+     *
      * @return true if running, false otherwise
      */
     public boolean isRunning() {
@@ -4453,21 +4520,21 @@ public class PanoramicCameraGpu {
     public boolean isUsingEscoSurfaceTexturePath() {
         return USE_ESCO_SURFACE_TEXTURE_PATH;
     }
-    
+
     /**
      * Gets the current camera surface mode.
      */
     public int getCameraSurfaceMode() {
         return cameraSurfaceMode;
     }
-    
+
     /**
      * Gets the active camera ID (the one currently open or selected by probe).
      */
     public int getCameraId() {
         return cameraIdOverride >= 0 ? cameraIdOverride : PHYSICAL_CAMERA_ID;
     }
-    
+
     /**
      * Sets the AVMCamera ID to use.
      * Must be called before start(). Default is 1 (works on Seal).
@@ -4477,7 +4544,7 @@ public class PanoramicCameraGpu {
         this.cameraIdOverride = id;
         logger.info("Camera ID override set to: " + id);
     }
-    
+
     /**
      * Sets the target frame rate for the binder camera backend.
      * Only effective when binder backend is enabled.
@@ -4517,7 +4584,7 @@ public class PanoramicCameraGpu {
             }
         }
     }
-    
+
     /**
      * Gets the target FPS setting.
      */
@@ -4546,7 +4613,7 @@ public class PanoramicCameraGpu {
             // as `% stride` so no torn-value hazard.
             recorderStrideCounter = 0;
             logger.info("Recorder frame stride set to " + clamped
-                + " (effective recording rate ≈ cameraFps/" + clamped + ")");
+                    + " (effective recording rate ≈ cameraFps/" + clamped + ")");
         }
     }
 
@@ -4607,7 +4674,7 @@ public class PanoramicCameraGpu {
         }
         logger.info("Camera auto-probe: " + (enabled ? "ENABLED" : "DISABLED"));
     }
-    
+
     /**
      * When true, skip frame-15/50 validation. Used when user manually set camera ID.
      */
@@ -4615,7 +4682,7 @@ public class PanoramicCameraGpu {
         this.skipFrameValidation = skip;
         if (skip) logger.info("Frame validation SKIPPED (manual camera override)");
     }
-    
+
     /**
      * Sets a callback to be notified when auto-probe discovers a working camera.
      * The pipeline can use this to persist the result for faster restarts.
@@ -4623,23 +4690,23 @@ public class PanoramicCameraGpu {
     public void setCameraProbeCallback(CameraProbeCallback callback) {
         this.probeCallback = callback;
     }
-    
+
     /**
      * Gets the timestamp of the last frame.
-     * 
+     *
      * @return Timestamp in milliseconds
      */
     public long getLastFrameTime() {
         return lastFrameTime;
     }
-    
+
     /**
      * SOTA: Gets the BYD camera coordinator for status queries.
      */
     public BydCameraCoordinator getCameraCoordinator() {
         return cameraCoordinator;
     }
-    
+
     /**
      * SOTA: Sets the yield listener for recording finalization during camera yield.
      * The pipeline registers this to ensure recordings are properly closed before
@@ -4648,23 +4715,23 @@ public class PanoramicCameraGpu {
     public void setCameraYieldListener(CameraYieldListener listener) {
         this.yieldListener = listener;
     }
-    
+
     /**
      * SOTA: Returns true if camera is currently yielded to native BYD app.
      */
     public boolean isCameraYielded() {
         return cameraYielded;
     }
-    
+
     /**
      * Gets the total frame count.
-     * 
+     *
      * @return Frame count
      */
     public int getFrameCount() {
         return frameCounter;
     }
-    
+
     /**
      * Returns true when camera probe is complete and frames are valid for consumption.
      * During probe, recording/streaming/AI are gated to prevent encoding BLACK frames.
@@ -4672,25 +4739,25 @@ public class PanoramicCameraGpu {
     public boolean isProbeComplete() {
         return probeComplete;
     }
-    
+
     /**
      * Gets the camera width.
-     * 
+     *
      * @return Width in pixels
      */
     public int getWidth() {
         return width;
     }
-    
+
     /**
      * Gets the camera height.
-     * 
+     *
      * @return Height in pixels
      */
     public int getHeight() {
         return height;
     }
-    
+
     /**
      * Gets the latest JPEG frame for a specific camera view.
      *
@@ -4792,14 +4859,14 @@ public class PanoramicCameraGpu {
         // Force 2x2 math when DiLink 4 is active AND caller supplied corner
         // values; otherwise legacy 4-strip math.
         boolean useCorner = USE_ESCO_SURFACE_TEXTURE_PATH
-            && !Float.isNaN(cornerX) && !Float.isNaN(cornerY);
+                && !Float.isNaN(cornerX) && !Float.isNaN(cornerY);
         if (useCorner) {
             return sampler.samplePerQuadrantJpeg(
-                cameraTextureId, width, height, sliceOffsetX,
-                cornerX, cornerY, xFlip, yFlip);
+                    cameraTextureId, width, height, sliceOffsetX,
+                    cornerX, cornerY, xFlip, yFlip);
         }
         return sampler.samplePerQuadrantJpeg(
-            cameraTextureId, width, height, sliceOffsetX);
+                cameraTextureId, width, height, sliceOffsetX);
     }
 
     /**
@@ -4826,12 +4893,12 @@ public class PanoramicCameraGpu {
                 highResSampler.setTextureMatrix(currentTexMatrix);
                 try {
                     org.json.JSONObject camCfgHr = com.overdrive.app.config
-                        .UnifiedConfigManager.loadConfig().optJSONObject("camera");
+                            .UnifiedConfigManager.loadConfig().optJSONObject("camera");
                     if (camCfgHr != null) {
                         highResSampler.setRedMaskEnabled(
-                            camCfgHr.optBoolean("dilink4RedMask", false));
+                                camCfgHr.optBoolean("dilink4RedMask", false));
                         highResSampler.setApaCenterInset(
-                            (float) camCfgHr.optDouble("dilink4ApaCenterInset", 0.09375));
+                                (float) camCfgHr.optDouble("dilink4ApaCenterInset", 0.09375));
                     }
                 } catch (Throwable t) {
                     logger.warn("Sampler red-mask flag read failed: " + t.getMessage());
@@ -4876,10 +4943,10 @@ public class PanoramicCameraGpu {
             }
         }
     }
-    
+
     /**
      * Checks CPU usage and logs warning if exceeds threshold.
-     * 
+     *
      * Provides breakdown by component to identify bottlenecks.
      */
     private void checkCpuUsage() {
@@ -4887,38 +4954,38 @@ public class PanoramicCameraGpu {
         if (now - lastCpuCheckTime < CPU_CHECK_INTERVAL_MS) {
             return;
         }
-        
+
         lastCpuCheckTime = now;
-        
+
         try {
             // Read /proc/stat for total CPU time
             java.io.BufferedReader reader = new java.io.BufferedReader(
                     new java.io.FileReader("/proc/stat"));
             String line = reader.readLine();
             reader.close();
-            
+
             // Parse CPU times
             String[] tokens = line.split("\\s+");
             long totalCpu = 0;
             for (int i = 1; i < tokens.length; i++) {
                 totalCpu += Long.parseLong(tokens[i]);
             }
-            
+
             // Read /proc/self/stat for process CPU time
             reader = new java.io.BufferedReader(
                     new java.io.FileReader("/proc/self/stat"));
             line = reader.readLine();
             reader.close();
-            
+
             tokens = line.split("\\s+");
             long processCpu = Long.parseLong(tokens[13]) + Long.parseLong(tokens[14]);
-            
+
             // Calculate CPU percentage (simplified)
             // Note: This is a rough estimate. For accurate measurement, use
             // Android Profiler or systrace.
             // Logging disabled to reduce log spam - uncomment for debugging
             // logger.debug( String.format("CPU check: process=%d, total=%d", processCpu, totalCpu));
-            
+
         } catch (Exception e) {
             // Silent fail - CPU monitoring is optional
         }
