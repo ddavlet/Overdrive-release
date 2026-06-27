@@ -187,6 +187,107 @@
     <string name="setup_overlay_title">Laat het weergeven via andere apps toe</string>
     <string name="setup_overlay_body">Hiermee kan je een zwevende statusindicator tonen voor het opnemen en volgen van reizen bovenop andere apps.</string>
     <string name="setup_overlay_button">Open overlaysinstellingen</string>
+    <!-- Onboarding guide (novice track). Parked-only, glanceable. Overdrive is a
+         protected brand name — keep it verbatim. -->
+    <!-- Shared button labels -->
+    <string name="onboarding_next">Volgende</string>
+    <string name="onboarding_back">Achterzijde</string>
+    <string name="onboarding_skip">Overslaan</string>
+    <string name="onboarding_later">Doe dit later</string>
+    <string name="onboarding_dismiss">Uitschakelen</string>
+    <string name="onboarding_exit">Rondleiding afsluiten</string>
+    <string name="onboarding_done_short">Ik snap het</string>
+    <!-- Step 0: authorize the daemon (system ADB popup) -->
+    <string name="onboarding_authorize_title">Wakker worden Overdrive</string>
+    <string name="onboarding_authorize_body">Overdrive bedient je camera\'s via een kleine helper op het apparaat. Android vraagt eenmalig om USB-foutopsporing toe te staan — tik op <b>Toestaan</b> en vink <b>Altijd toestaan vanaf dit apparaat</b> aan zodat het na elke herstart actief blijft.</string>
+    <string name="onboarding_authorize_button">Toegang toestaan</string>
+    <string name="onboarding_authorize_waiting_title">Waiting for permission…</string>
+    <string name="onboarding_authorize_waiting_body">Accepteer de Android-popup. Als je het niet ziet, wordt het mogelijk al toegekend - dit zal alleen doorgaan.</string>
+    <string name="onboarding_authorize_retry_title">Nog steeds niet verbonden</string>
+    <string name="onboarding_authorize_retry_body">The helper isn\'t running yet. The Android permission may have been dismissed. Try again and remember to check <b>Always allow</b>.</string>
+    <string name="onboarding_authorize_retry_button">Opnieuw proberen</string>
+    <!-- Camera mapping chapter -->
+    <string name="onboarding_camera_step_label">Camera · stap %1$d van %2$d</string>
+    <string name="onboarding_camera_intro_title">Instellen van je camera\'s</string>
+    <string name="onboarding_camera_intro_body">Laten we Overdrive vertellen welke camera je 360 weergave is en welke is je dashcam. Het duurt ongeveer een minuut, en je kunt deze later wijzigen.</string>
+    <string name="onboarding_camera_intro_primary">Beginnen</string>
+    <string name="onboarding_camera_opening_title">Camera setup openen…</string>
+    <string name="onboarding_camera_opening_body">Een live preview van uw camera\'s laden. Dit kan een paar seconden duren.</string>
+    <string name="onboarding_camera_pano_title">Dit is je 360 weergave</string>
+    <string name="onboarding_camera_pano_body">Gebruik de pijlen om de doorgestikte 4-up afbeelding te vinden. Lees het vanuit de BOTTOM: linksonder is de REAR, rechts is de LEFT kant.</string>
+    <string name="onboarding_camera_dashcam_title">Zoek nu de weg-voor-camera</string>
+    <string name="onboarding_camera_dashcam_body">Stap door de camera\'s met de pijlen en stop op degene die het windschild / vooruit uitzicht toont. Noteer het nummer - je zal het hierna kiezen.</string>
+    <string name="onboarding_camera_pick_title">Kies je 360 camera</string>
+    <string name="onboarding_camera_pick_body">Kies in de bovenste kaart het nummer voor je 360- / normale camera. Niet zeker? Laat het op AUTO staan en Overdrive zoekt het zelf uit.</string>
+    <string name="onboarding_camera_pick_primary">Volgende</string>
+    <string name="onboarding_camera_pick_dash_title">Kies uw dashcam camera</string>
+    <string name="onboarding_camera_pick_dash_body">Kies in deze kaart het dashcam nummer dat je eerder hebt gevonden - of laat het op AUTO.</string>
+    <string name="onboarding_camera_save_primary">Opslaan &amp; herstart</string>
+    <string name="onboarding_camera_applying_title">Toepassen — camera\'s herstarten</string>
+    <string name="onboarding_camera_applying_body">De feed gaat donker en knippert voor ongeveer 10 seconden. Dit is normaal - hang strak.</string>
+    <string name="onboarding_camera_verify_title">Snelle controle</string>
+    <string name="onboarding_camera_verify_body">Laat de 360 weergave de gestikte afbeelding en de dashcam zien de weg vooruit? Als een feed er verkeerd uitziet, tik dan opnieuw selecteren — er is niets kapot.</string>
+    <string name="onboarding_camera_verify_ok">Lijkt rechts</string>
+    <string name="onboarding_camera_verify_repick">Kies opnieuw</string>
+    <string name="onboarding_camera_windshield_title">Road-off band bij opnames? (optioneel)</string>
+    <string name="onboarding_camera_windshield_body">Voor de OEM-dashcam indeling — de windsheldcamera als een strip op uw opname - kies Windschild in het rolmenu, kies de forward-camera en sla op. De meeste eigenaren kunnen dit overslaan.</string>
+    <string name="onboarding_camera_windshield_primary">Laat me zien</string>
+    <string name="onboarding_camera_windshield_skip">Nee, bedankt</string>
+    <!-- Vehicle profile chapter -->
+    <string name="onboarding_vehicle_title">Vertel Overdrive over je accu</string>
+    <string name="onboarding_vehicle_body">Kies uw model en wij vullen het kWh, of typ het zelf (15–120). Dit maakt de berekening van bereik en oplaadschatting nauwkeurig. U kunt het overslaan en later instellen.</string>
+    <string name="onboarding_vehicle_primary">Batterij instellen</string>
+    <!-- Dashboard orientation chapter -->
+    <string name="onboarding_dash_tiles_title">Je cockpit in een oogopslag</string>
+    <string name="onboarding_dash_tiles_body">Deze kaarten zijn knoppen - tik om Live camera\'s te openen, Opnamen, Diensten of je voertuig te openen.</string>
+    <string name="onboarding_dash_chips_title">Deze alleen de status weergeven</string>
+    <string name="onboarding_dash_chips_body">De chips bovenaan de top show opname, services en je externe link. Ze werken alleen bij - ze zijn geen knoppen.</string>
+    <string name="onboarding_dash_chips_body_land">Je live status - opname, services en externe link - wordt hier getoond. Het is alleen bijgewerkt.</string>
+    <!-- Completion -->
+    <string name="onboarding_done_title">Cockpit klaar</string>
+    <string name="onboarding_done_body">Camera\'s toegewezen en batterij ingesteld. Tik op Live om je feeds te bekijken - of de diepere instellingen op elk gewenst moment te verkennen.</string>
+    <string name="onboarding_done_primary">Voltooid</string>
+    <string name="onboarding_done_secondary">Installatie verkennen</string>
+    <!-- Expert track (chaptered walkthrough of deeper config; footguns warned, never fired) -->
+    <string name="onboarding_help_cd">Rondleiding afgelegd</string>
+    <string name="onboarding_reset_toast">Onboarding resetten - opnieuw afspelen van de handleiding</string>
+    <string name="onboarding_expert_chapter_label">Hoofdstuk %1$d van %2$d</string>
+    <string name="onboarding_expert_finish">Beëindigen</string>
+    <string name="onboarding_expert_menu_title">Rondleiding afgelegd</string>
+    <string name="onboarding_expert_menu_body">Een snelle loop door de diepere installatie — jouw voertuigprofiel, integraties, surveillance, diagnose, diensten en beveiliging. Je kunt op elk moment stoppen.</string>
+    <string name="onboarding_expert_menu_start">Rondleiding starten</string>
+    <string name="onboarding_expert_vehicle_title">Voertuig profiel</string>
+    <string name="onboarding_expert_vehicle_body">Tik op de tegel van het voertuig om de grootte en het model van de batterij in te stellen - het voorziet in nauwkeurige range en gezondheidsschattingen.</string>
+    <string name="onboarding_expert_recordings_title">Je opnamen</string>
+    <string name="onboarding_expert_recordings_body">Schakel tussen Dashcam (continu + proximity clips) en Surveillance (geparkeerde sentry gebeurtenissen) met deze schakelaar - elk bewaart zijn eigen bibliotheek. Tik op een clip om het af te spelen.</string>
+    <string name="onboarding_expert_live_title">Live camera\'s</string>
+    <string name="onboarding_expert_live_body">Open Live vanaf hier om alle camera\'s in real time te bekijken. Handig om het uitzicht voor een station te controleren of tijdens het parkeren in de buurt.</string>
+    <string name="onboarding_expert_trips_title">Trip geschiedenis</string>
+    <string name="onboarding_expert_trips_body">Rit logt elke schijf - route, afstand, duur en energieverbruik - zodat je kunt bekijken waar de auto is geweest.</string>
+    <string name="onboarding_expert_roadsense_title">RoadSense</string>
+    <string name="onboarding_expert_roadsense_body">RoadSense gebruikt de bewegingssensoren en GPS van de auto om wegrisico\'s te detecteren - bumpen, potholes, snelheidsonderbrekers - en waarschuwt je voor de nieuwe. De tabbladen dekken detectie, de gevarenkaart, waarschuwingschimes en Blind Spot. Schakel de hoofdschakelaar in om een van de te gebruiken.</string>
+    <string name="onboarding_expert_blindspot_title">Blinde Spot</string>
+    <string name="onboarding_expert_blindspot_body">Schakel Blind Spot hier in in het tabblad en wanneer je een draai signaleert een zij-camera weergave verschijnt automatisch op het scherm - links voor een linkersignaal, rechts voor rechts - en verbergt zich kort daarna dan. Het loopt alleen terwijl een draai signaal aan is.</string>
+    <string name="onboarding_expert_maps_title">Navigation</string>
+    <string name="onboarding_expert_maps_body">Open de kaart voor volledige draaiknop navigatie — zoek een bestemming, plaats voor routering en live begeleiding plus nabijgelegen interessante punten en eventuele gevaren voor de wegen heeft onderweg gelogd. Je kunt het ook automatisch projecteren op het instrument cluster wanneer je begint te rijden - dat levens wisselt op het tabblad van RoadSense.</string>
+    <string name="onboarding_expert_integrations_title">Integraties</string>
+    <string name="onboarding_expert_integrations_body">Verbind Telegram alerts, een Betere Routeplanner, MQTT of BYD Cloud. Elke kaart opent de setup in de app. De pil boven draait groen wanneer alles met elkaar verbonden is.</string>
+    <string name="onboarding_expert_bydcloud_title">BYD Cloud ontgrendelt bediening op afstand</string>
+    <string name="onboarding_expert_bydcloud_body">Het koppelen van uw BYD-account hier maakt externe vergrendeling, flash en hoorn van uw telefoon mogelijk. Behandel de gekoppelde account en toegangscode als gevoelig.</string>
+    <string name="onboarding_expert_surveillance_title">Surveillance &amp; opname</string>
+    <string name="onboarding_expert_surveillance_body">Afstemming detectie, kwaliteit en opslag hier Deze open als in-app configuratiepagina\'s van uw auto - een leeg scherm betekent gewoon dat de helper nog steeds begint.</string>
+    <string name="onboarding_expert_camprobe_title">Camera probe - voorzichtig</string>
+    <string name="onboarding_expert_camprobe_body">Deze hermaps die een fysieke camera elke rol verzorgen en de camera\'s opnieuw opstarten. Verander het alleen als een feed er verkeerd uitziet - je stelt dit eerder in de handleiding.</string>
+    <string name="onboarding_expert_traffic_title">Data monitor — vereist voor toegang op afstand</string>
+    <string name="onboarding_expert_traffic_body">BYD\'s ingebouwde Traffic Monitor blokkeert andere apps om de ingebouwde SIM van de auto te gebruiken. Als je je auto op afstand wilt bereiken via de BYD SIM, moet je hem hier uitschakelen. De hoofdunit herstart om de verandering toe te passen.</string>
+    <string name="onboarding_expert_daemons_title">Diensten - met zorg</string>
+    <string name="onboarding_expert_daemons_body">Deze schakelen tussen start en stop achtergrondservices. Hiermee schakelt u Camera, toezicht of ACC Sentry stops uit en houdt u deze uit totdat u ze weer inschakelt - zelfs na een herstart.</string>
+    <string name="onboarding_expert_security_title">Vergrendelen met een pincode</string>
+    <string name="onboarding_expert_security_body">Stel een pincode in om de app te voorzien van gedeelde voertuigen. Houd toezicht en het opnemen van lopende dingen terwijl de app vergrendeld is. Een vergeten pincode kan alleen worden gewist van een computer over USB.</string>
+    <string name="onboarding_expert_reset_title">Reset gegevens — permanent</string>
+    <string name="onboarding_expert_reset_body">Dit verwijdert opnames, gebeurtenissen en instellingen en kan niet ongedaan worden gemaakt. Het is hier als je de auto ooit verkoopt - niet een deel van het normaal gebruik.</string>
+    <string name="onboarding_expert_done_title">Dat is de rondleiding</string>
+    <string name="onboarding_expert_done_body">Je hebt de diepere instellingen gezien. Open deze handleiding op elk moment opnieuw via de helpknop.</string>
     <!-- Language picker (drawer footer + bottom sheet) -->
     <string name="cd_close">Sluiten</string>
     <string name="language_picker_title">Taal</string>
@@ -262,6 +363,12 @@
     <string name="recording_lib_filter_section_severity">Zwaarheid</string>
     <string name="recording_lib_filter_section_type">Type</string>
     <string name="recording_lib_filter_section_place">Plaats</string>
+    <string name="recording_lib_filter_section_storage">Opslagruimte</string>
+    <!-- Storage filter chip labels (full words; the tile badge uses the short
+         SD/USB/INT forms above). -->
+    <string name="recording_lib_storage_filter_internal">Intern</string>
+    <string name="recording_lib_storage_filter_sd">SD-kaart</string>
+    <string name="recording_lib_storage_filter_usb">USB</string>
     <string name="recording_lib_place_search_hint">Search places…</string>
     <string name="recording_lib_chip_type_normal">Normaal</string>
     <string name="recording_lib_chip_type_proximity">Nabijheid</string>
@@ -302,6 +409,11 @@
     <string name="recording_lib_type_event">EVENEMENT</string>
     <string name="recording_lib_type_proximity">PROX</string>
     <string name="recording_lib_type_oem">OEM</string>
+    <!-- Per-clip storage tag — where the clip actually landed. Surfaces the
+         silent SD→internal fallback (SD bridged behind the USB power rail). -->
+    <string name="recording_lib_storage_sd">SA</string>
+    <string name="recording_lib_storage_usb">USB</string>
+    <string name="recording_lib_storage_internal">INT</string>
     <!-- Toast shown when a multi-select share is dispatched. -->
     <string name="toast_share_recordings">Delen van %1$d opnamen</string>
     <!-- fragment_sentry_config -->
@@ -377,7 +489,7 @@
     <string name="toast_updated_to">Updated naar %1$s</string>
     <string name="toast_update_install_failed">Installatie mislukt: %1$s</string>
     <string name="toast_checking_for_updates">Ik kijk naar updates.</string>
-    <string name="toast_app_up_to_date">App is up to date (%1$s)</string>
+    <string name="toast_app_up_to_date">App is up-to-date (%1$s)</string>
     <string name="toast_update_check_failed">Update-controle mislukt: %1$s</string>
     <!-- Update dialog + version picker -->
     <string name="update_dialog_available_title">Update beschikbaar</string>
@@ -572,7 +684,7 @@
     <string name="toast_batch_delete_partial">%1$d verwijderd, %2$d mislukt</string>
     <string name="play_with_chooser">Speel met</string>
     <!-- Setup guide -->
-    <string name="setup_version_banner">Updated to %1$s — re-confirm autostart, BYD wipes it on every install</string>
+    <string name="setup_version_banner">Bijgewerkt naar %1$s - herbevestig autostart, BYD wast het op elke installatie</string>
     <string name="setup_overlay_already_granted">Al toegekend</string>
     <!-- Setup guide — post-setup tips section -->
     <string name="setup_tips_header">Tips &amp; probleemoplossing</string>
@@ -621,6 +733,7 @@
     <string name="rail_recordings">Opnames</string>
     <string name="rail_vehicle">Voertuig</string>
     <string name="rail_trips">Ritten</string>
+    <string name="rail_charging">Opladen</string>
     <string name="rail_integrations">Integratie</string>
     <string name="rail_diagnostics">Diagnostiek</string>
     <string name="rail_settings">Instellingen</string>
@@ -652,6 +765,33 @@
     <string name="settings_about_version_label">Versie</string>
     <string name="settings_about_package_label">Bouwen</string>
     <string name="settings_about_check_update_value">Controleer de nieuwste GitHub-release en installeer indien nieuwer.</string>
+    <!-- Backup & Restore (same-device). The backup file contains credentials +
+         the device key, so the copy warns the user to keep it private. -->
+    <string name="settings_backup_export_title">Exporteer instellingen</string>
+    <string name="settings_backup_export_value">Een reservekopiebestand van uw huidige instellingen opslaan. Houd het privé - het bevat uw inloggegevens.</string>
+    <string name="settings_backup_import_title">Instellingen herstellen</string>
+    <string name="settings_backup_import_value">Een back-upbestand van dezelfde hoofdeenheid laden.</string>
+    <string name="settings_backup_default_filename">overdrive-backup.json</string>
+    <string name="settings_backup_exporting">Building backup…</string>
+    <string name="settings_backup_export_failed">Back-up exporteren mislukt</string>
+    <string name="settings_backup_saved">Back-up opgeslagen</string>
+    <string name="settings_backup_saved_to">Back-up opgeslagen in %1$s</string>
+    <string name="settings_backup_save_failed">Kon het back-up bestand niet opslaan</string>
+    <string name="settings_backup_pick_file">Kies een back-up om te herstellen</string>
+    <string name="settings_backup_no_files">Geen reservekopiebestanden gevonden. Exporteer er één, of kopieer een backup .json naar %1$s, en probeer het dan opnieuw.</string>
+    <string name="settings_backup_read_failed">Kon het bestand niet lezen</string>
+    <string name="settings_backup_invalid_file">Dat bestand is geen geldige Overdrive back-up</string>
+    <string name="settings_backup_restoring">Restoring…</string>
+    <string name="settings_backup_restored">Instellingen hersteld</string>
+    <string name="settings_backup_restore_failed">Herstellen mislukt</string>
+    <string name="settings_backup_daemon_down">De camera-service moet worden uitgevoerd om een back-up te maken of te herstellen. Start het vanaf Daemons en probeer het opnieuw.</string>
+    <string name="settings_backup_restore_confirm_title">Instellingen herstellen?</string>
+    <string name="settings_backup_restore_confirm_msg">Dit vervangt uw huidige instellingen van Overdrive met de back-up en herlaadt services. Het werkt alleen op dezelfde hoofdeenheid waarop de back-up is gemaakt.</string>
+    <string name="settings_backup_restore_confirm_btn">Herstellen</string>
+    <string name="settings_backup_restart_hint">Instellingen hersteld. Herstart de cameradaemon (Daemons → Camera → Herstart) om ervoor te zorgen dat elke herstelde instelling wordt toegepast.</string>
+    <string name="settings_backup_trips_prompt">Inclusief je reisgeschiedenis (afstand, energie, kosten, scores, start- en eindlocaties)? Gedetailleerde telemetrie wordt niet meegenomen. Het bestand zal je locatiegeschiedenis bevatten - houd het privé.</string>
+    <string name="settings_backup_settings_only">Alleen instellingen</string>
+    <string name="settings_backup_with_trips">Inclusief ritten</string>
     <!-- Support-development section: tiered options, low-cost first.
          star → spread → coffee, in that visual order. Copy aims for
          personality without being corny — short, warm, specific. -->
@@ -1072,6 +1212,9 @@
     <string name="roadsense_map_routing">Route vinden…</string>
     <string name="roadsense_map_route_failed">Kon geen route vinden. Probeer het opnieuw.</string>
     <string name="roadsense_map_need_key">Voeg een routing key toe in RoadSense instellingen om te navigeren.</string>
+    <string name="roadsense_map_route_key_rejected">Route sleutel geweigerd. Controleer je sleutel in de RoadSense instellingen.</string>
+    <string name="roadsense_map_route_network">Netwerk te langzaam om een route te vinden. Controleer je verbinding en probeer het opnieuw.</string>
+    <string name="roadsense_map_route_http">Fout in de routing service (%1$d). Probeer het binnenkort opnieuw.</string>
     <string name="roadsense_map_rerouting">Route uitschakelen - opnieuw berekenen…</string>
     <string name="roadsense_map_arrived">U bent gearriveerd.</string>
     <string name="roadsense_map_nav_started">Navigeer naar %1$s</string>
@@ -1165,14 +1308,13 @@
     <string name="roadsense_map_search_to_save">Zoek een plaats om in te stellen als %1$s</string>
     <!-- Shown when re-entering the map with a previously-set trip restored. -->
     <string name="roadsense_map_trip_restored">Rit hersteld</string>
-
     <!-- Cloudflared paid-tunnel settings -->
-    <string name="cloudflared_token_storage_note">Het token wordt versleuteld opgeslagen en gedeeld tussen de app en het daemon-proces.</string>
-    <string name="cloudflared_token_hint">Voer cloudflared-token in</string>
-    <string name="cloudflare_paid_version">Cloudflare betaalde versie</string>
-    <string name="dialog_cloudflared_settings_title">Cloudflared-instellingen</string>
-    <string name="dialog_cloudflared_settings_message">Bepaal of je betaald Cloudflare of trycloudflare gebruikt. Als je betaald Cloudflare gebruikt, voer dan je tunnel-token in.</string>
-    <string name="toast_cloudflared_token_cannot_be_empty">Als je de betaalde versie instelt, mag het token niet leeg zijn</string>
-    <string name="toast_cloudflared_token_invalid">Ongeldig token: gebruik alleen letters, cijfers en de tekens . _ - =</string>
-    <string name="toast_cloudflared_saved_settings">Cloudflared-instellingen opgeslagen</string>
+    <string name="cloudflared_token_storage_note">Token wordt veilig opgeslagen en gedeeld tussen app en daemon processen.</string>
+    <string name="cloudflared_token_hint">Voer cloudflared token in</string>
+    <string name="cloudflare_paid_version">Cloudflare Betaalde Versie</string>
+    <string name="dialog_cloudflared_settings_title">🌐 Cloudflared Settings</string>
+    <string name="dialog_cloudflared_settings_message">Bepaal of je betaald Cloudflare of trycloudflare. Als je betaalde Cloudflare gebruikt, voer dan je tunneltoken in.</string>
+    <string name="toast_cloudflared_token_cannot_be_empty">Als je op de betaalde versie hebt gezet, mag de token niet leeg zijn</string>
+    <string name="toast_cloudflared_token_invalid">Ongeldige sleutel: gebruik alleen letters, cijfers en . _ - = tekens</string>
+    <string name="toast_cloudflared_saved_settings">Cloudflared instellingen opgeslagen</string>
 </resources>

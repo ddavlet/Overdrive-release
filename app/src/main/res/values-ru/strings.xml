@@ -187,6 +187,107 @@
     <string name="setup_overlay_title">Позвольте отображаться в других приложениях</string>
     <string name="setup_overlay_body">Определить это, чтобы показать плавающий индикатор состояния для записи и отслеживания путешествий на вершине других приложений.</string>
     <string name="setup_overlay_button">Откройте настройки перекрытия</string>
+    <!-- Onboarding guide (novice track). Parked-only, glanceable. Overdrive is a
+         protected brand name — keep it verbatim. -->
+    <!-- Shared button labels -->
+    <string name="onboarding_next">Следующий</string>
+    <string name="onboarding_back">Назад</string>
+    <string name="onboarding_skip">Пропустить</string>
+    <string name="onboarding_later">Сделать это позже</string>
+    <string name="onboarding_dismiss">Отклонить</string>
+    <string name="onboarding_exit">Выйти из тура</string>
+    <string name="onboarding_done_short">Понятно</string>
+    <!-- Step 0: authorize the daemon (system ADB popup) -->
+    <string name="onboarding_authorize_title">Активируйте Overdrive</string>
+    <string name="onboarding_authorize_body">Overdrive runs your cameras through a small on-device helper. Android will ask once to allow USB debugging — tap <b>Allow</b> and check <b>Always allow from this device</b> so it stays on after every restart.</string>
+    <string name="onboarding_authorize_button">Разрешить доступ</string>
+    <string name="onboarding_authorize_waiting_title">Ожидание разрешения…</string>
+    <string name="onboarding_authorize_waiting_body">Принять всплывающее окно Android. Если вы его не увидите, может быть предоставлено — это будет продолжено самостоятельно.</string>
+    <string name="onboarding_authorize_retry_title">Все еще не подключен</string>
+    <string name="onboarding_authorize_retry_body">Помощник еще не запущен. Возможно, разрешение Android было отклонено. Попробуйте еще раз и не забудьте проверить <b>всегда разрешить</b>.</string>
+    <string name="onboarding_authorize_retry_button">Попробовать еще раз</string>
+    <!-- Camera mapping chapter -->
+    <string name="onboarding_camera_step_label">Камера · шаг %1$d из %2$d</string>
+    <string name="onboarding_camera_intro_title">Настройка камер</string>
+    <string name="onboarding_camera_intro_body">Давайте расскажем Overdrive о том, какая камера является вашим 360 просмотром и какая из них является вашей панелью. Это займет около минуты, и вы можете изменить ее позже.</string>
+    <string name="onboarding_camera_intro_primary">Начать</string>
+    <string name="onboarding_camera_opening_title">Открытие настройки камеры…</string>
+    <string name="onboarding_camera_opening_body">Загрузка предварительного просмотра в реальном времени с ваших камер. Это может занять несколько секунд.</string>
+    <string name="onboarding_camera_pano_title">Это ваш 360 вид</string>
+    <string name="onboarding_camera_pano_body">Используйте стрелки, чтобы найти изображение разметки 4-вверх и прочтите его из BOTTOM: внизу слева находится REAR, внизу справа находится левая сторона.</string>
+    <string name="onboarding_camera_dashcam_title">Теперь найдите дорогу впереди камеру</string>
+    <string name="onboarding_camera_dashcam_body">Пройдите через камеру с помощью стрелок и остановитесь на одной с показом ветрового щита / вперед. Обратите внимание на его номер — вы выберете его дальше.</string>
+    <string name="onboarding_camera_pick_title">Выберите вашу 360 камеру</string>
+    <string name="onboarding_camera_pick_body">В верхней карте выберите номер для вашей 360 / обычной камеры. Не уверены? Оставьте его на AUTO и Overdrive фигуры.</string>
+    <string name="onboarding_camera_pick_primary">Следующий</string>
+    <string name="onboarding_camera_pick_dash_title">Выберите камеру приборной камеры</string>
+    <string name="onboarding_camera_pick_dash_body">В этой карте выберите ранее имевшийся номер панели инструментов — или оставьте его на AUTO.</string>
+    <string name="onboarding_camera_save_primary">Сохранить &amp; перезапустить</string>
+    <string name="onboarding_camera_applying_title">Применение — перезапуск камер</string>
+    <string name="onboarding_camera_applying_body">Лента будет темная и мигающая в течение примерно 10 секунд. Это нормально — повесить плотность.</string>
+    <string name="onboarding_camera_verify_title">Быстрая проверка</string>
+    <string name="onboarding_camera_verify_body">Показывает ли 360 вид вышитое изображение, а панель показывает дорогу вперед? Если лента выглядит неправильной, нажмите Re-pick — ничего не сломано.</string>
+    <string name="onboarding_camera_verify_ok">Выглядит правильно</string>
+    <string name="onboarding_camera_verify_repick">Перевыбрать</string>
+    <string name="onboarding_camera_windshield_title">Предыдущая полоса при записях? (опционально)</string>
+    <string name="onboarding_camera_windshield_body">Для макета панели OEM — ветрозащитная камера в виде полосы поверх вашей записи — выберите ветровой щит в меню ролей, выберите камеру перенаправления, и Save. Большинство владельцев могут пропустить это.</string>
+    <string name="onboarding_camera_windshield_primary">Покажите мне</string>
+    <string name="onboarding_camera_windshield_skip">Нет благодарности</string>
+    <!-- Vehicle profile chapter -->
+    <string name="onboarding_vehicle_title">Укажите Overdrive вашу батарею</string>
+    <string name="onboarding_vehicle_body">Выберите свою модель и мы заполним кВт или напечатаем ее самостоятельно (15–120). Это повышает точность оценок диапазона и зарядки. Вы можете пропустить и установить их позже.</string>
+    <string name="onboarding_vehicle_primary">Установить батарею</string>
+    <!-- Dashboard orientation chapter -->
+    <string name="onboarding_dash_tiles_title">Ваш коктейль на взгляд</string>
+    <string name="onboarding_dash_tiles_body">Эти карты являются кнопками — нажмите для открытия живых камер, записей, услуг или автомобиля.</string>
+    <string name="onboarding_dash_chips_title">Они просто показывают статус</string>
+    <string name="onboarding_dash_chips_body">Фишки вверх по топ-шоу, службам и вашей удаленной ссылке. Они сами обновляются — они не кнопки.</string>
+    <string name="onboarding_dash_chips_body_land">Ваш живой статус — запись, сервисы и удаленная ссылка — здесь отображается самостоятельно.</string>
+    <!-- Completion -->
+    <string name="onboarding_done_title">Cockpit готов</string>
+    <string name="onboarding_done_body">Камеры сопоставлены и настроены батареи. Нажмите \"Живой\", чтобы посмотреть ваши каналы — или откройте более широкие настройки в любое время.</string>
+    <string name="onboarding_done_primary">Готово</string>
+    <string name="onboarding_done_secondary">Узнать настройки</string>
+    <!-- Expert track (chaptered walkthrough of deeper config; footguns warned, never fired) -->
+    <string name="onboarding_help_cd">Тур с гидом</string>
+    <string name="onboarding_reset_toast">Сброс посадки — повтор руководства</string>
+    <string name="onboarding_expert_chapter_label">Глава %1$d из %2$d</string>
+    <string name="onboarding_expert_finish">Закончить</string>
+    <string name="onboarding_expert_menu_title">Тур с гидом</string>
+    <string name="onboarding_expert_menu_body">Быстрый переход к более глубокой настройке — ваш профиль автомобиля, интеграция, наблюдение, диагностика, услуги и безопасность. Вы можете остановить его в любое время.</string>
+    <string name="onboarding_expert_menu_start">Начать тур</string>
+    <string name="onboarding_expert_vehicle_title">Профиль автомобиля</string>
+    <string name="onboarding_expert_vehicle_body">Нажмите на плитку транспортного средства, чтобы установить размер и модель батареи — она обеспечивает точный диапазон и оценку здоровья.</string>
+    <string name="onboarding_expert_recordings_title">Ваши записи</string>
+    <string name="onboarding_expert_recordings_body">Переключение между Dashcam (продолжение+клипы приближения) и Наблюдение (события припаркованного чувства) с этим переключателем — каждая из них хранит свою собственную библиотеку. Нажмите на клип, чтобы сыграть.</string>
+    <string name="onboarding_expert_live_title">Живые камеры</string>
+    <string name="onboarding_expert_live_body">Откройте \"Живой\" отсюда, чтобы посмотреть все камеры в режиме реального времени. Удобно для просмотра перед дисплеем или во время парковки рядом с ним.</string>
+    <string name="onboarding_expert_trips_title">История поездок</string>
+    <string name="onboarding_expert_trips_body">Поездки регистрируют каждый автомобиль — маршрут, расстояние, длительность и энергопотребление, так что вы можете проверить, где был автомобиль.</string>
+    <string name="onboarding_expert_roadsense_title">RoadSense</string>
+    <string name="onboarding_expert_roadsense_body">RoadSense использует датчики движения автомобиля и GPS для обнаружения дорожных опасностей — бумпы, капсулы, взломщики скорости — и предупреждает вас перед известными. Обнаружение закладок, карты опасности, предупреждающие фишки и слепые споты. Включите переключатель, чтобы использовать любой из них.</string>
+    <string name="onboarding_expert_blindspot_title">Слепой спот</string>
+    <string name="onboarding_expert_blindspot_body">Включите слепые споты на вкладке здесь и, когда вы сигнализируете о повороте, вид боковой камеры появляется на экране автоматически — слева от левого сигнала, справа — и вскоре скрывается. Он запускается только при включенном сигнале.</string>
+    <string name="onboarding_expert_maps_title">Navigation</string>
+    <string name="onboarding_expert_maps_body">Откройте Карту для полной походной навигации — ищите место назначения, ищите маршрут и живую инструкцию, плюс близлежащие точки интереса и любые дорожные опасности RoadSense вошел в путь. Вы также можете автоматически создать его в кластере инструментов, когда начнете ездить — это переключает жизнь на вкладке RoadSense.</string>
+    <string name="onboarding_expert_integrations_title">Интеграции</string>
+    <string name="onboarding_expert_integrations_body">Подключите оповещения Telegram, лучший планировщик, MQTT или BYD Cloud. Каждая карта открывает настройки внутри приложения. Таблетка вверх становится зеленым, когда все связано.</string>
+    <string name="onboarding_expert_bydcloud_title">Облако BYD разблокирует пульт дистанционного управления</string>
+    <string name="onboarding_expert_bydcloud_body">Привязывая ваш BYD аккаунт, вы получаете возможность удаленного блокирования, мигания и рога с вашего телефона. Рассматривайте связанный аккаунт и код доступа как чувствительный.</string>
+    <string name="onboarding_expert_surveillance_title">Наблюдение &amp; запись</string>
+    <string name="onboarding_expert_surveillance_body">Точное обнаружение, качество и хранение здесь. Они открыты как внутри-приложенные страницы конфигурации, обслуживаемые в вашем автомобиле — пустой экран означает, что помощник все еще запускается.</string>
+    <string name="onboarding_expert_camprobe_title">Проб камеры — осторожный</string>
+    <string name="onboarding_expert_camprobe_body">Это переопределяет каналы физической камеры и перезапускает камеры. Измените его, если лента выглядит неправильно — вы настроили это раньше в руководстве.</string>
+    <string name="onboarding_expert_traffic_title">Монитор трафика — необходим для удаленного доступа</string>
+    <string name="onboarding_expert_traffic_body">Встроенный Traffic Monitor блокирует другие приложения от использования встроенной SIM-карты автомобиля. Если вы хотите дистанционно добраться до своего автомобиля через BYD SIM, вы должны отключить его здесь. Главное устройство перезагрузится, чтобы применить изменения.</string>
+    <string name="onboarding_expert_daemons_title">Услуги — обработка с осторожностью</string>
+    <string name="onboarding_expert_daemons_body">Эти переключатели запускают и останавливают фоновые службы. Выключение камеры, монитора или ACC Sentry останавливает запись и не отключает ее до тех пор, пока вы их не включите, даже после перезагрузки.</string>
+    <string name="onboarding_expert_security_title">Заблокировать PIN-кодом</string>
+    <string name="onboarding_expert_security_body">Установите PIN-код для доступа к приложению для общих автомобилей. Наблюдение и регистрация продолжаются пока приложение заблокировано. Забыли PIN-код можно удалить только с компьютера по USB.</string>
+    <string name="onboarding_expert_reset_title">Сброс данных — навсегда</string>
+    <string name="onboarding_expert_reset_body">Это стирает записи, события и настройки и не может быть отменено. Это если вы когда-либо продаете автомобиль — не часть обычного использования.</string>
+    <string name="onboarding_expert_done_title">Это тур</string>
+    <string name="onboarding_expert_done_body">Вы видели более широкие настройки. Откройте это руководство снова в любое время с помощью кнопки справки.</string>
     <!-- Language picker (drawer footer + bottom sheet) -->
     <string name="cd_close">Закрыть</string>
     <string name="language_picker_title">Язык</string>
@@ -262,6 +363,12 @@
     <string name="recording_lib_filter_section_severity">Тяжесть</string>
     <string name="recording_lib_filter_section_type">Тип</string>
     <string name="recording_lib_filter_section_place">Место</string>
+    <string name="recording_lib_filter_section_storage">Хранилище</string>
+    <!-- Storage filter chip labels (full words; the tile badge uses the short
+         SD/USB/INT forms above). -->
+    <string name="recording_lib_storage_filter_internal">Внутренний</string>
+    <string name="recording_lib_storage_filter_sd">SD-карта</string>
+    <string name="recording_lib_storage_filter_usb">USB</string>
     <string name="recording_lib_place_search_hint">Поиск мест…</string>
     <string name="recording_lib_chip_type_normal">Норм.</string>
     <string name="recording_lib_chip_type_proximity">Близость</string>
@@ -302,6 +409,11 @@
     <string name="recording_lib_type_event">СОБЫТИЕ</string>
     <string name="recording_lib_type_proximity">PROX</string>
     <string name="recording_lib_type_oem">OEM</string>
+    <!-- Per-clip storage tag — where the clip actually landed. Surfaces the
+         silent SD→internal fallback (SD bridged behind the USB power rail). -->
+    <string name="recording_lib_storage_sd">УР</string>
+    <string name="recording_lib_storage_usb">USB</string>
+    <string name="recording_lib_storage_internal">СОБСТВЕННЫЙ</string>
     <!-- Toast shown when a multi-select share is dispatched. -->
     <string name="toast_share_recordings">Совместное использование %1$d записей</string>
     <!-- fragment_sentry_config -->
@@ -627,6 +739,7 @@
     <string name="rail_recordings">Записи</string>
     <string name="rail_vehicle">Автомобиль</string>
     <string name="rail_trips">Поездки</string>
+    <string name="rail_charging">Зарядка</string>
     <string name="rail_integrations">Интеграции</string>
     <string name="rail_diagnostics">Диагностика</string>
     <string name="rail_settings">Настройки</string>
@@ -658,6 +771,33 @@
     <string name="settings_about_version_label">Версия</string>
     <string name="settings_about_package_label">Построение</string>
     <string name="settings_about_check_update_value">Проверьте последнюю версию GitHub и установите, если она новее.</string>
+    <!-- Backup & Restore (same-device). The backup file contains credentials +
+         the device key, so the copy warns the user to keep it private. -->
+    <string name="settings_backup_export_title">Настройки экспорта</string>
+    <string name="settings_backup_export_value">Сохраните резервную копию ваших текущих настроек. Сохраните её конфиденциальной — в ней хранятся ваши учетные данные.</string>
+    <string name="settings_backup_import_title">Восстановить настройки</string>
+    <string name="settings_backup_import_value">Загрузить файл резервной копии с той же самой головной единицей.</string>
+    <string name="settings_backup_default_filename">overdrive-backup.json</string>
+    <string name="settings_backup_exporting">Создание резервной копии…</string>
+    <string name="settings_backup_export_failed">Не удалось сделать резервную копию</string>
+    <string name="settings_backup_saved">Резервная копия сохранена</string>
+    <string name="settings_backup_saved_to">Резервная копия сохранена в %1$s</string>
+    <string name="settings_backup_save_failed">Не удалось сохранить файл резервной копии</string>
+    <string name="settings_backup_pick_file">Выберите резервную копию для восстановления</string>
+    <string name="settings_backup_no_files">Файлы резервных копий не найдены. Экспортируйте один раз или копируйте резервную копию .json в %1$s, затем попробуйте снова.</string>
+    <string name="settings_backup_read_failed">Не удалось прочитать файл</string>
+    <string name="settings_backup_invalid_file">Этот файл не является допустимой резервной копией Overdrive</string>
+    <string name="settings_backup_restoring">Восстановление…</string>
+    <string name="settings_backup_restored">Настройки восстановлены</string>
+    <string name="settings_backup_restore_failed">Не удалось восстановить</string>
+    <string name="settings_backup_daemon_down">Служба камеры должна быть запущена для резервного копирования или восстановления. Запустите её из демонов, а затем повторите попытку.</string>
+    <string name="settings_backup_restore_confirm_title">Восстановить настройки?</string>
+    <string name="settings_backup_restore_confirm_msg">Это заменяет ваши текущие настройки Overdrive на службы резервного копирования и перезагрузки. Он работает только на том же блоке резервного копирования, на котором была сделана резервная копия.</string>
+    <string name="settings_backup_restore_confirm_btn">Восстановить</string>
+    <string name="settings_backup_restart_hint">Настройки восстановлены. Перезапустите демон камеры (Daemons → Camera → Перезапустить), чтобы убедиться, что все восстановленные настройки будут применены.</string>
+    <string name="settings_backup_trips_prompt">Включите историю вашей поездки (расстояние, энергия, стоимость, результаты, начальные и конечные места)? Детали телеметрии по поездкам не включены. Файл будет содержать историю вашего местоположения — сохранить его приватным.</string>
+    <string name="settings_backup_settings_only">Только настройки</string>
+    <string name="settings_backup_with_trips">Включить поездки</string>
     <!-- Support-development section: tiered options, low-cost first.
          star → spread → coffee, in that visual order. Copy aims for
          personality without being corny — short, warm, specific. -->
@@ -1092,6 +1232,9 @@
     <string name="roadsense_map_routing">Поиск маршрута…</string>
     <string name="roadsense_map_route_failed">Не удалось найти маршрут. Попробуйте еще раз.</string>
     <string name="roadsense_map_need_key">Добавьте ключ маршрутизации в настройках RoadSense для навигации.</string>
+    <string name="roadsense_map_route_key_rejected">Ключ маршрутизации отклонен. Проверьте ваш ключ в настройках RoadSense</string>
+    <string name="roadsense_map_route_network">Сеть слишком медленно, чтобы найти маршрут. Проверьте подключение и повторите попытку.</string>
+    <string name="roadsense_map_route_http">Ошибка службы маршрутизации (%1$d). Попробуйте позже.</string>
     <string name="roadsense_map_rerouting">Выходной маршрут — пересчет…</string>
     <string name="roadsense_map_arrived">Вы прибыли.</string>
     <string name="roadsense_map_nav_started">Переход к %1$s</string>
@@ -1185,14 +1328,13 @@
     <string name="roadsense_map_search_to_save">Искать место для установки как %1$s</string>
     <!-- Shown when re-entering the map with a previously-set trip restored. -->
     <string name="roadsense_map_trip_restored">Поездка восстановлена</string>
-
     <!-- Cloudflared paid-tunnel settings -->
-    <string name="cloudflared_token_storage_note">Токен хранится в зашифрованном виде и используется совместно приложением и процессом демона.</string>
-    <string name="cloudflared_token_hint">Введите токен cloudflared</string>
+    <string name="cloudflared_token_storage_note">Токен надежно хранится между приложениями и демонами.</string>
+    <string name="cloudflared_token_hint">Ввести в облачный токен</string>
     <string name="cloudflare_paid_version">Платная версия Cloudflare</string>
     <string name="dialog_cloudflared_settings_title">Настройки Cloudflared</string>
-    <string name="dialog_cloudflared_settings_message">Укажите, используете ли вы платный Cloudflare или trycloudflare. Если вы используете платный Cloudflare, введите токен своего туннеля.</string>
-    <string name="toast_cloudflared_token_cannot_be_empty">Если вы выбрали платную версию, токен не может быть пустым</string>
-    <string name="toast_cloudflared_token_invalid">Недопустимый токен: используйте только буквы, цифры и символы . _ - =</string>
+    <string name="dialog_cloudflared_settings_message">Определите, используете ли вы платный Cloudflare или trycloudflare. Если вы используете платный Cloudflare, введите свой маркер туннеля.</string>
+    <string name="toast_cloudflared_token_cannot_be_empty">Если вы установили платную версию, токен не может быть пустым</string>
+    <string name="toast_cloudflared_token_invalid">Неверный токен: используйте только буквы, цифры и . _ - = символы</string>
     <string name="toast_cloudflared_saved_settings">Настройки Cloudflared сохранены</string>
 </resources>

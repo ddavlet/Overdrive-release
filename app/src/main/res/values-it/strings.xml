@@ -187,6 +187,107 @@
     <string name="setup_overlay_title">Consenti visualizzazione sopra altre app</string>
     <string name="setup_overlay_body">Attivalo per mostrare sopra le altre app un indicatore flottante per registrazione e tracciamento viaggi.</string>
     <string name="setup_overlay_button">Apri impostazioni overlay</string>
+    <!-- Onboarding guide (novice track). Parked-only, glanceable. Overdrive is a
+         protected brand name — keep it verbatim. -->
+    <!-- Shared button labels -->
+    <string name="onboarding_next">Successivo</string>
+    <string name="onboarding_back">Indietro</string>
+    <string name="onboarding_skip">Salta</string>
+    <string name="onboarding_later">Fai questo più tardi</string>
+    <string name="onboarding_dismiss">Ignora</string>
+    <string name="onboarding_exit">Esci dal tour</string>
+    <string name="onboarding_done_short">Ho capito</string>
+    <!-- Step 0: authorize the daemon (system ADB popup) -->
+    <string name="onboarding_authorize_title">Risveglia Overdrive</string>
+    <string name="onboarding_authorize_body">Overdrive esegue le telecamere attraverso un piccolo aiutante sul dispositivo. Android chiederà una volta di consentire il debug USB — tocca <b>Consenti</b> e controlla <b>Consenti sempre da questo dispositivo</b> in modo che rimanga acceso dopo ogni riavvio.</string>
+    <string name="onboarding_authorize_button">Consenti l\'accesso</string>
+    <string name="onboarding_authorize_waiting_title">In attesa del permesso…</string>
+    <string name="onboarding_authorize_waiting_body">Accetta il popup Android. Se non lo vedi, può già essere concesso — questo continuerà da solo.</string>
+    <string name="onboarding_authorize_retry_title">Ancora non connesso</string>
+    <string name="onboarding_authorize_retry_body">L\'helper non è ancora in esecuzione. Il permesso Android potrebbe essere stato respinto. Riprova e ricorda di controllare <b>Consenti sempre</b>.</string>
+    <string name="onboarding_authorize_retry_button">Riprova</string>
+    <!-- Camera mapping chapter -->
+    <string name="onboarding_camera_step_label">Camera · passo %1$d di %2$d</string>
+    <string name="onboarding_camera_intro_title">Imposta le tue telecamere</string>
+    <string name="onboarding_camera_intro_body">Diciamo a Overdrive quale fotocamera è la tua vista 360 e quale è il tuo dashcam. Ci vuole circa un minuto, e puoi cambiarla più tardi.</string>
+    <string name="onboarding_camera_intro_primary">Inizia</string>
+    <string name="onboarding_camera_opening_title">Apertura configurazione fotocamera…</string>
+    <string name="onboarding_camera_opening_body">Caricamento di un\'anteprima live dalle fotocamere. Questo può richiedere alcuni secondi.</string>
+    <string name="onboarding_camera_pano_title">Questa è la tua vista 360</string>
+    <string name="onboarding_camera_pano_body">Usare le frecce per trovare l\'immagine 4 su cucita. Leggerla dal BOTTOM: in basso a sinistra è il REAR, in basso a destra è il lato SINISTRA.</string>
+    <string name="onboarding_camera_dashcam_title">Ora trova la telecamera road-ahead</string>
+    <string name="onboarding_camera_dashcam_body">Passare attraverso le telecamere con le frecce e fermarsi su quella che mostra il parabrezza / vista in avanti. Nota il suo numero — lo sceglierai dopo.</string>
+    <string name="onboarding_camera_pick_title">Scegli la tua fotocamera 360</string>
+    <string name="onboarding_camera_pick_body">Nella scheda superiore, scegliere il numero per la fotocamera 360 / normale. Non è sicuro? Lasciarlo su AUTO e Overdrive figura fuori.</string>
+    <string name="onboarding_camera_pick_primary">Successivo</string>
+    <string name="onboarding_camera_pick_dash_title">Scegli la tua fotocamera dashcam</string>
+    <string name="onboarding_camera_pick_dash_body">In questa scheda, scegliere il numero dashcam che avete trovato in precedenza — o lasciarlo su AUTO.</string>
+    <string name="onboarding_camera_save_primary">Save &amp; restart</string>
+    <string name="onboarding_camera_applying_title">Applicando — riavvio delle telecamere</string>
+    <string name="onboarding_camera_applying_body">Il feed andrà scuro e lampeggia per circa 10 secondi. Questo è normale — appendere stretto.</string>
+    <string name="onboarding_camera_verify_title">Controllo rapido</string>
+    <string name="onboarding_camera_verify_body">La vista a 360 gradi mostra l\'immagine cucita e la dashcam mostra la strada davanti? Se un feed sembra sbagliato, tocca Re-pick — niente è rotto.</string>
+    <string name="onboarding_camera_verify_ok">Sembra giusto</string>
+    <string name="onboarding_camera_verify_repick">Ri-pick</string>
+    <string name="onboarding_camera_windshield_title">Road-ahead band sulle registrazioni? (facoltativo)</string>
+    <string name="onboarding_camera_windshield_body">Per il layout della dashcam OEM — la fotocamera parabrezza come una striscia sulla parte superiore della registrazione — scegliere il parabrezza nel menu di ruolo, scegliere la fotocamera in avanti, e Salvare. La maggior parte dei proprietari può saltare questo.</string>
+    <string name="onboarding_camera_windshield_primary">Mostrami</string>
+    <string name="onboarding_camera_windshield_skip">No grazie</string>
+    <!-- Vehicle profile chapter -->
+    <string name="onboarding_vehicle_title">Dillo a Overdrive della batteria</string>
+    <string name="onboarding_vehicle_body">Scegli il tuo modello e compiliamo il kWh, o scrivilo tu stesso (15–120). Questo rende accurati l\'intervallo e le stime di ricarica. Puoi saltare e impostarlo più tardi.</string>
+    <string name="onboarding_vehicle_primary">Imposta batteria</string>
+    <!-- Dashboard orientation chapter -->
+    <string name="onboarding_dash_tiles_title">Il tuo cockpit a colpo d\'occhio</string>
+    <string name="onboarding_dash_tiles_body">Queste carte sono pulsanti — tocca per aprire telecamere live, registrazioni, servizi o il tuo veicolo.</string>
+    <string name="onboarding_dash_chips_title">Mostra solo lo stato</string>
+    <string name="onboarding_dash_chips_body">I chip in alto mostrano la registrazione, i servizi e il tuo collegamento remoto. Si aggiornano da soli, non sono pulsanti.</string>
+    <string name="onboarding_dash_chips_body_land">Il tuo stato live — registrazione, servizi e collegamento remoto — si presenta qui. Si aggiorna da solo.</string>
+    <!-- Completion -->
+    <string name="onboarding_done_title">Cockpit pronto</string>
+    <string name="onboarding_done_body">Fotocamere mappate e batteria impostata. Tocca Live per guardare i tuoi feed - o esplorare le impostazioni più profonde in qualsiasi momento.</string>
+    <string name="onboarding_done_primary">Fatto</string>
+    <string name="onboarding_done_secondary">Esplora Configurazione</string>
+    <!-- Expert track (chaptered walkthrough of deeper config; footguns warned, never fired) -->
+    <string name="onboarding_help_cd">Visita guidata</string>
+    <string name="onboarding_reset_toast">Reimpostazione degli onboarding — riprodurre la guida</string>
+    <string name="onboarding_expert_chapter_label">Capitolo %1$d di %2$d</string>
+    <string name="onboarding_expert_finish">Termina</string>
+    <string name="onboarding_expert_menu_title">Visita guidata</string>
+    <string name="onboarding_expert_menu_body">Una rapida passeggiata attraverso la configurazione più profonda — il tuo profilo del veicolo, integrazioni, sorveglianza, diagnostica, servizi e sicurezza.</string>
+    <string name="onboarding_expert_menu_start">Inizia il tour</string>
+    <string name="onboarding_expert_vehicle_title">Profilo del veicolo</string>
+    <string name="onboarding_expert_vehicle_body">Toccare la tessera Veicolo per impostare la dimensione della batteria e il modello: potenzia la gamma accurata e le stime di salute.</string>
+    <string name="onboarding_expert_recordings_title">Le tue registrazioni</string>
+    <string name="onboarding_expert_recordings_body">Passa tra Dashcam (continui + clip di prossimità) e Sorveglianza (eventi parcheggiati di sentra) con questa commutazione — ognuno mantiene la propria biblioteca. Tocca una clip per riprodurla.</string>
+    <string name="onboarding_expert_live_title">Fotocamere live</string>
+    <string name="onboarding_expert_live_body">Aprire Live da qui per guardare tutte le telecamere in tempo reale. Handy per controllare la vista prima di un disco o mentre parcheggiato nelle vicinanze.</string>
+    <string name="onboarding_expert_trips_title">Storico dei viaggi</string>
+    <string name="onboarding_expert_trips_body">Trips registra ogni unità — percorso, distanza, durata e consumo di energia — in modo da poter rivedere dove l\'auto è stata.</string>
+    <string name="onboarding_expert_roadsense_title">RoadSense</string>
+    <string name="onboarding_expert_roadsense_body">RoadSense utilizza i sensori di movimento della vettura e il GPS per rilevare i pericoli della strada — urti, buche, interruttori di velocità — e ti avvisa prima di quelli noti. Il suo rilevamento di copertina delle schede, la mappa di pericolo, i camini di avvertimento e il punto cieco. Accendi l\'interruttore principale per usarlo.</string>
+    <string name="onboarding_expert_blindspot_title">Spot Cieco</string>
+    <string name="onboarding_expert_blindspot_body">Abilita il punto cieco nella scheda qui e, quando si segnala un turno, una vista della telecamera laterale appare automaticamente sullo schermo — sinistra per un segnale sinistro, destra per uno destro — poi si nasconde poco dopo. Funziona solo mentre un segnale di accensione è acceso.</string>
+    <string name="onboarding_expert_maps_title">Navigation</string>
+    <string name="onboarding_expert_maps_body">Aprire la mappa per la navigazione completa turn-by-turn — cercare una destinazione, ottenere itinerari e guida in diretta, più punti di interesse nelle vicinanze e tutti i rischi stradali RoadSense ha registrato lungo la strada. È inoltre possibile proiettarlo automaticamente sul cluster di strumenti quando si inizia a guidare — che consente di attivare o disattivare vite nella scheda Mappa di RoadSense.</string>
+    <string name="onboarding_expert_integrations_title">Integrazioni</string>
+    <string name="onboarding_expert_integrations_body">Collegare avvisi Telegram, un migliore Routeplanner, MQTT o BYD Cloud. Ogni scheda apre la sua configurazione all\'interno dell\'app. La pillola in alto diventa verde quando tutto è collegato.</string>
+    <string name="onboarding_expert_bydcloud_title">BYD Cloud sblocca il telecomando</string>
+    <string name="onboarding_expert_bydcloud_body">Collegando il tuo account BYD qui abilita blocco remoto, flash e corno dal tuo telefono. Tratta l\'account collegato e il codice di accesso come sensibile.</string>
+    <string name="onboarding_expert_surveillance_title">Sorveglianza &amp; registrazione</string>
+    <string name="onboarding_expert_surveillance_body">Rilevamento, qualità e conservazione raffinati qui. Questi aprono come in-app config pagine servite dalla vostra auto — uno schermo vuoto significa solo che l\'aiutante è ancora avviato.</string>
+    <string name="onboarding_expert_camprobe_title">Sonda della telecamera — attenta</string>
+    <string name="onboarding_expert_camprobe_body">Questo ri-mappa che la fotocamera fisica alimenta ogni ruolo e riavvia le telecamere. Cambialo solo se un feed sembra sbagliato — hai impostato questo in precedenza nella guida.</string>
+    <string name="onboarding_expert_traffic_title">Monitoraggio del traffico — necessario per l\'accesso remoto</string>
+    <string name="onboarding_expert_traffic_body">Il Traffic Monitor integrato di BYD blocca altre app dall\'utilizzo della SIM integrata dell\'auto. Se vuoi raggiungere la tua auto da remoto sulla BYD SIM, devi disabilitarla qui. La testa riavvia per applicare la modifica.</string>
+    <string name="onboarding_expert_daemons_title">Servizi — maneggiare con cura</string>
+    <string name="onboarding_expert_daemons_body">Questi interruttori avviano e fermano i servizi in background. Disattivando Fotocamera, Sorveglianza o ACC Sentry si interrompe la registrazione e la si spegne fino a quando non li riavvii — anche dopo un riavvio.</string>
+    <string name="onboarding_expert_security_title">Blocca con un PIN</string>
+    <string name="onboarding_expert_security_body">Impostare un PIN per cancello l\'applicazione per i veicoli condivisi. Sorveglianza e registrazione continuano in esecuzione mentre l\'applicazione è bloccata. Un PIN dimenticato può essere cancellato solo da un computer su USB.</string>
+    <string name="onboarding_expert_reset_title">Reimposta dati — permanente</string>
+    <string name="onboarding_expert_reset_body">Questo cancella registrazioni, eventi e impostazioni e non può essere annullato. E \'qui se mai vendi l\'auto - non parte di un uso normale.</string>
+    <string name="onboarding_expert_done_title">Questo è il tour</string>
+    <string name="onboarding_expert_done_body">Hai visto le impostazioni più profonde. Apri nuovamente questa guida in qualsiasi momento dal pulsante di aiuto.</string>
     <!-- Language picker (drawer footer + bottom sheet) -->
     <string name="cd_close">Chiudi</string>
     <string name="language_picker_title">Lingua</string>
@@ -262,6 +363,12 @@
     <string name="recording_lib_filter_section_severity">Gravità</string>
     <string name="recording_lib_filter_section_type">Tipo</string>
     <string name="recording_lib_filter_section_place">Luogo</string>
+    <string name="recording_lib_filter_section_storage">Archiviazione</string>
+    <!-- Storage filter chip labels (full words; the tile badge uses the short
+         SD/USB/INT forms above). -->
+    <string name="recording_lib_storage_filter_internal">Interno</string>
+    <string name="recording_lib_storage_filter_sd">Scheda SD</string>
+    <string name="recording_lib_storage_filter_usb">USB</string>
     <string name="recording_lib_place_search_hint">Cerca luoghi…</string>
     <string name="recording_lib_chip_type_normal">Normale</string>
     <string name="recording_lib_chip_type_proximity">Vicinanza</string>
@@ -302,6 +409,11 @@
     <string name="recording_lib_type_event">EVENTO</string>
     <string name="recording_lib_type_proximity">PROX</string>
     <string name="recording_lib_type_oem">OEM</string>
+    <!-- Per-clip storage tag — where the clip actually landed. Surfaces the
+         silent SD→internal fallback (SD bridged behind the USB power rail). -->
+    <string name="recording_lib_storage_sd">SD</string>
+    <string name="recording_lib_storage_usb">USB</string>
+    <string name="recording_lib_storage_internal">INT</string>
     <!-- Toast shown when a multi-select share is dispatched. -->
     <string name="toast_share_recordings">Condividere registrazioni di %1$d</string>
     <!-- fragment_sentry_config -->
@@ -377,7 +489,7 @@
     <string name="toast_updated_to">Aggiornato a %1$s</string>
     <string name="toast_update_install_failed">Installazione aggiornamento non riuscita: %1$s</string>
     <string name="toast_checking_for_updates">Controllo aggiornamenti...</string>
-    <string name="toast_app_up_to_date">App is up to date (%1$s)</string>
+    <string name="toast_app_up_to_date">L\'app è aggiornata (%1$s)</string>
     <string name="toast_update_check_failed">Controllo aggiornamenti non riuscito: %1$s</string>
     <!-- Update dialog + version picker -->
     <string name="update_dialog_available_title">Aggiornamento disponibile</string>
@@ -574,7 +686,7 @@ Questa azione non puo essere annullata.</string>
     <string name="toast_batch_delete_partial">%1$d eliminati, %2$d non riusciti</string>
     <string name="play_with_chooser">Riproduci con</string>
     <!-- Setup guide -->
-    <string name="setup_version_banner">Updated to %1$s — re-confirm autostart, BYD wipes it on every install</string>
+    <string name="setup_version_banner">Aggiornato a %1$s — riconferma avvio automatico, BYD lo cancella su ogni installazione</string>
     <string name="setup_overlay_already_granted">Gia concesso</string>
     <!-- Setup guide — post-setup tips section -->
     <string name="setup_tips_header">Suggerimenti e risoluzione dei problemi</string>
@@ -623,6 +735,7 @@ Questa azione non puo essere annullata.</string>
     <string name="rail_recordings">Registrazioni</string>
     <string name="rail_vehicle">Veicolo</string>
     <string name="rail_trips">Viaggi</string>
+    <string name="rail_charging">Ricarica</string>
     <string name="rail_integrations">Integrazioni</string>
     <string name="rail_diagnostics">Diagnostica</string>
     <string name="rail_settings">Impostazioni</string>
@@ -654,6 +767,33 @@ Questa azione non puo essere annullata.</string>
     <string name="settings_about_version_label">Versione</string>
     <string name="settings_about_package_label">Build</string>
     <string name="settings_about_check_update_value">Controlla l ultima release GitHub e installa se e piu recente.</string>
+    <!-- Backup & Restore (same-device). The backup file contains credentials +
+         the device key, so the copy warns the user to keep it private. -->
+    <string name="settings_backup_export_title">Esporta impostazioni</string>
+    <string name="settings_backup_export_value">Salva un file di backup delle impostazioni correnti. Tienilo privato — contiene le tue credenziali.</string>
+    <string name="settings_backup_import_title">Ripristina impostazioni</string>
+    <string name="settings_backup_import_value">Carica un file di backup fatto su questa stessa unità di testa.</string>
+    <string name="settings_backup_default_filename">overdrive-backup.json</string>
+    <string name="settings_backup_exporting">Costruzione backup…</string>
+    <string name="settings_backup_export_failed">Esportazione backup fallita</string>
+    <string name="settings_backup_saved">Backup salvato</string>
+    <string name="settings_backup_saved_to">Backup salvato in %1$s</string>
+    <string name="settings_backup_save_failed">Impossibile salvare il file di backup</string>
+    <string name="settings_backup_pick_file">Scegli un backup da ripristinare</string>
+    <string name="settings_backup_no_files">Nessun file di backup trovato. Esporta uno prima, o copia un backup .json in %1$s, quindi riprova.</string>
+    <string name="settings_backup_read_failed">Impossibile leggere il file</string>
+    <string name="settings_backup_invalid_file">Quel file non è un backup Overdrive valido</string>
+    <string name="settings_backup_restoring">Ripristino…</string>
+    <string name="settings_backup_restored">Impostazioni ripristinate</string>
+    <string name="settings_backup_restore_failed">Ripristino fallito</string>
+    <string name="settings_backup_daemon_down">Il servizio fotocamera deve essere in esecuzione per eseguire il backup o il ripristino. Avviarlo da Demoni, quindi riprovare.</string>
+    <string name="settings_backup_restore_confirm_title">Ripristinare le impostazioni?</string>
+    <string name="settings_backup_restore_confirm_msg">Questo sostituisce le impostazioni attuali di Overdrive con i servizi di backup e ricarica. Funziona solo sulla stessa unità di testa su cui è stato effettuato il backup.</string>
+    <string name="settings_backup_restore_confirm_btn">Ripristina</string>
+    <string name="settings_backup_restart_hint">Impostazioni ripristinate. Riavviare il demone della fotocamera (Daemons → Fotocamera → Riavvio) per assicurarsi che ogni impostazione ripristinata venga applicata.</string>
+    <string name="settings_backup_trips_prompt">Includi la tua storia di viaggio (distanza, energia, costi, punteggi, luoghi di partenza/fine)? Il file conterrà la cronologia delle posizioni — mantienilo privato.</string>
+    <string name="settings_backup_settings_only">Solo impostazioni</string>
+    <string name="settings_backup_with_trips">Includi viaggi</string>
     <!-- Support-development section: tiered options, low-cost first.
          star → spread → coffee, in that visual order. Copy aims for
          personality without being corny — short, warm, specific. -->
@@ -669,7 +809,7 @@ Questa azione non puo essere annullata.</string>
     <string name="settings_about_license_title">Licenza</string>
     <string name="settings_about_license_value">MIT — open source. Tocca per vedere il testo completo.</string>
     <string name="settings_about_source_title">Codice sorgente</string>
-    <string name="settings_about_source_value">github.com/yash-srivastava/Overdrive-release</string>
+    <string name="settings_about_source_value">github.com/yash-srivastava/OverDrive-release</string>
     <string name="settings_about_star_title">Metti una stella su GitHub</string>
     <string name="settings_about_star_value">Ci vuole un secondo. Conta molto.</string>
     <string name="settings_about_thanks_title">Grazie</string>
@@ -1074,6 +1214,9 @@ Questa azione non puo essere annullata.</string>
     <string name="roadsense_map_routing">Ricerca percorso…</string>
     <string name="roadsense_map_route_failed">Impossibile trovare un percorso. Riprova.</string>
     <string name="roadsense_map_need_key">Aggiungi una chiave di routing nelle impostazioni di RoadSense per navigare.</string>
+    <string name="roadsense_map_route_key_rejected">Chiave di routing rifiutata. Controlla la tua chiave nelle impostazioni di RoadSense.</string>
+    <string name="roadsense_map_route_network">Rete troppo lenta per trovare un percorso. Controlla la tua connessione e riprova.</string>
+    <string name="roadsense_map_route_http">Errore servizio di routing (%1$d). Riprova a breve.</string>
     <string name="roadsense_map_rerouting">Fuori rotta — ricalcolo…</string>
     <string name="roadsense_map_arrived">Siete arrivate.</string>
     <string name="roadsense_map_nav_started">Navigazione in %1$s</string>
@@ -1167,14 +1310,13 @@ Questa azione non puo essere annullata.</string>
     <string name="roadsense_map_search_to_save">Cerca un posto da impostare come %1$s</string>
     <!-- Shown when re-entering the map with a previously-set trip restored. -->
     <string name="roadsense_map_trip_restored">Viaggio ripristinato</string>
-
     <!-- Cloudflared paid-tunnel settings -->
-    <string name="cloudflared_token_storage_note">Il token viene memorizzato in forma crittografata e condiviso tra l\'app e il processo daemon.</string>
-    <string name="cloudflared_token_hint">Inserisci il token cloudflared</string>
-    <string name="cloudflare_paid_version">Versione a pagamento di Cloudflare</string>
-    <string name="dialog_cloudflared_settings_title">Impostazioni Cloudflared</string>
-    <string name="dialog_cloudflared_settings_message">Definisci se stai usando Cloudflare a pagamento o trycloudflare. Se usi Cloudflare a pagamento, inserisci il token del tuo tunnel.</string>
-    <string name="toast_cloudflared_token_cannot_be_empty">Se imposti la versione a pagamento il token non può essere vuoto</string>
-    <string name="toast_cloudflared_token_invalid">Token non valido: usa solo lettere, numeri e i caratteri . _ - =</string>
+    <string name="cloudflared_token_storage_note">Il token è memorizzato in modo sicuro e condiviso tra i processi di app e demoni.</string>
+    <string name="cloudflared_token_hint">Inserisci il token nuvoloso</string>
+    <string name="cloudflare_paid_version">Versione A Pagamento Cloudflare</string>
+    <string name="dialog_cloudflared_settings_title">🌐 Impostazioni Cloudflared</string>
+    <string name="dialog_cloudflared_settings_message">Definire se si utilizza Cloudflare a pagamento o trycloudflare. Se si utilizza Cloudflare a pagamento, inserire il token del tunnel.</string>
+    <string name="toast_cloudflared_token_cannot_be_empty">Se si imposta la versione a pagamento, il token non può essere vuoto</string>
+    <string name="toast_cloudflared_token_invalid">Token non valido: usa solo lettere, numeri e . _ - = caratteri</string>
     <string name="toast_cloudflared_saved_settings">Impostazioni Cloudflared salvate</string>
 </resources>
